@@ -1,0 +1,8 @@
+bin/
+obj/
+__pycache__/
+.pytest_cache/
+*.pyc
+# Raw stats.nba.com responses: large, regenerable with pipeline/gather.py, not redistributed.
+data/raw/
+data/*.tmp
