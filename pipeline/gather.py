@@ -24,9 +24,22 @@ from nbagm.config import RAW_CACHE_PATH, SEASON  # noqa: E402
 from nbagm.frames import SchemaError, check_columns, tables  # noqa: E402
 from nbagm.rawstore import RawStore  # noqa: E402
 
-BASE_DELAY_S = 0.8
-RETRY_DELAYS_S = (5, 15, 45, 120)
+BASE_DELAY_S = 1.5          # pause between requests (plus up to 1 s of jitter)
+MAX_DELAY_S = 6.0
+RETRY_DELAYS_S = (5, 20)    # quick retries for a one-off network blip
 TIMEOUT_S = 60
+
+# stats.nba.com throttles clients that ask too fast: it answers with empty
+# bodies (JSONDecodeError) or times out, for every request, for a while.
+# Several failures in a row means that, so pause instead of burning retries,
+# then continue more slowly.
+THROTTLE_AFTER_FAILURES = 3
+COOLDOWN_S = 600
+MAX_COOLDOWNS_WITHOUT_SUCCESS = 4
+
+
+class Throttled(RuntimeError):
+    pass
 
 
 def endpoint_class(module_name):
@@ -52,7 +65,42 @@ def fetch(req):
     raise RuntimeError(last_error)
 
 
-def run(store, requests, label, check_schema=False):
+class Pacer:
+    """Spacing between requests, slowed down after every throttling episode."""
+
+    def __init__(self):
+        self.delay = BASE_DELAY_S
+        self.consecutive_failures = 0
+        self.cooldowns_without_success = 0
+
+    def success(self):
+        self.consecutive_failures = 0
+        self.cooldowns_without_success = 0
+
+    def failure(self):
+        self.consecutive_failures += 1
+        if self.consecutive_failures < THROTTLE_AFTER_FAILURES:
+            return
+        self.cooldowns_without_success += 1
+        if self.cooldowns_without_success > MAX_COOLDOWNS_WITHOUT_SUCCESS:
+            raise Throttled(
+                "stats.nba.com is still refusing requests after "
+                f"{MAX_COOLDOWNS_WITHOUT_SUCCESS} cool-downs. Stop here and run this script "
+                "again in a few hours (everything fetched so far is kept).")
+        self.delay = min(self.delay * 1.5, MAX_DELAY_S)
+        resume = time.strftime("%H:%M", time.localtime(time.time() + COOLDOWN_S))
+        print(f"  {self.consecutive_failures} failures in a row: stats.nba.com is throttling. "
+              f"Pausing {COOLDOWN_S // 60} min (until ~{resume}), then continuing at one "
+              f"request per ~{self.delay:.1f}s. No need to do anything.", flush=True)
+        time.sleep(COOLDOWN_S)
+        self.consecutive_failures = 0
+
+    def wait(self):
+        time.sleep(self.delay + random.uniform(0, 1.0))
+
+
+def run(store, requests, label, check_schema=False, pacer=None):
+    pacer = pacer or Pacer()
     todo = [r for r in requests if not store.has(r.endpoint, r.params)]
     print(f"[{label}] {len(requests)} requests, {len(requests) - len(todo)} cached, "
           f"{len(todo)} to fetch", flush=True)
@@ -64,15 +112,18 @@ def run(store, requests, label, check_schema=False):
             if check_schema:
                 check_columns(req.name, req.endpoint, payload)
             store.put(req.endpoint, req.params, payload)
+            pacer.success()
         except SchemaError as e:
             print(f"  SCHEMA MISMATCH: {e}", flush=True)
             store.record_failure(req.endpoint, req.params, e)
             failed += 1
+            pacer.success()   # the server answered; this is not throttling
         except Exception as e:
-            print(f"  FAILED after retries: {e}", flush=True)
+            print(f"  FAILED: {e}", flush=True)
             store.record_failure(req.endpoint, req.params, e)
             failed += 1
-        time.sleep(BASE_DELAY_S + random.uniform(0, 0.6))
+            pacer.failure()
+        pacer.wait()
     return failed
 
 
@@ -119,14 +170,24 @@ def main():
               f"\nSMOKE FOUND {failed} PROBLEM(S) - send me the output above before the full run.")
         return 1 if failed else 0
 
-    failed = run(store, league, "league", check_schema=True)
-    failed += run(store, [r for t in plan.TEAM_IDS for r in plan.team_requests(t)], "teams",
-                  check_schema=True)
-    games = regular_season_game_ids(store)
-    failed += run(store, [r for g in games for r in plan.game_requests(g)],
-                  f"games ({len(games)})", check_schema=True)
-    if failed:
-        print(f"\n{failed} request(s) failed. Re-run this script to retry just those.")
+    pacer = Pacer()
+    try:
+        everything = league + [r for t in plan.TEAM_IDS for r in plan.team_requests(t)]
+        run(store, everything, "league + teams", check_schema=True, pacer=pacer)
+        games = regular_season_game_ids(store)
+        game_reqs = [r for g in games for r in plan.game_requests(g)]
+        run(store, game_reqs, f"games ({len(games)})", check_schema=True, pacer=pacer)
+        # One more pass over anything that failed (usually requests caught in a throttle window).
+        missing = [r for r in everything + game_reqs if not store.has(r.endpoint, r.params)]
+        if missing:
+            run(store, missing, "second pass over failed requests", check_schema=True, pacer=pacer)
+    except Throttled as e:
+        print(f"\n{e}")
+        return 1
+    missing = [r for r in everything + game_reqs if not store.has(r.endpoint, r.params)]
+    if missing:
+        print(f"\n{len(missing)} request(s) still missing. Run this script again later to retry "
+              "just those; if the same ones keep failing, run --status and send me the output.")
         return 1
     print(f"\nAll raw inputs cached in {args.cache}.\nNext: python pipeline/build.py")
     return 0
