@@ -38,6 +38,12 @@ COOLDOWN_S = 600
 MAX_COOLDOWNS_WITHOUT_SUCCESS = 4
 
 
+# Requests the build can do without: one attempt, no retries, and failures neither
+# count as throttling nor as "missing". stats.nba.com fails gamerotation for most
+# games, so lineups are rebuilt from play-by-play instead (rotation is a cross-check).
+OPTIONAL_ENDPOINTS = {"gamerotation"}
+
+
 class Throttled(RuntimeError):
     pass
 
@@ -50,10 +56,10 @@ def endpoint_class(module_name):
     raise RuntimeError(f"no endpoint class in nba_api.stats.endpoints.{module_name}")
 
 
-def fetch(req):
+def fetch(req, retry_delays=RETRY_DELAYS_S):
     cls = endpoint_class(req.endpoint)
     last_error = None
-    for attempt, retry_delay in enumerate((0,) + RETRY_DELAYS_S):
+    for attempt, retry_delay in enumerate((0,) + tuple(retry_delays)):
         if retry_delay:
             print(f"    retry {attempt} in {retry_delay}s ({last_error})", flush=True)
             time.sleep(retry_delay)
@@ -107,6 +113,14 @@ def run(store, requests, label, check_schema=False, pacer=None):
     failed = 0
     for i, req in enumerate(todo, 1):
         print(f"  ({i}/{len(todo)}) {req.name}", flush=True)
+        if req.endpoint in OPTIONAL_ENDPOINTS:
+            try:
+                store.put(req.endpoint, req.params, fetch(req, retry_delays=()))
+            except Exception as e:
+                print(f"    (optional, skipped: {type(e).__name__})", flush=True)
+                store.record_failure(req.endpoint, req.params, e)
+            pacer.wait()
+            continue
         try:
             payload = fetch(req)
             if check_schema:
@@ -125,6 +139,11 @@ def run(store, requests, label, check_schema=False, pacer=None):
             pacer.failure()
         pacer.wait()
     return failed
+
+
+def required_missing(store, requests):
+    return [r for r in requests
+            if r.endpoint not in OPTIONAL_ENDPOINTS and not store.has(r.endpoint, r.params)]
 
 
 def regular_season_game_ids(store):
@@ -150,13 +169,17 @@ def main():
         print(f"team:   {sum(store.has(r.endpoint, r.params) for r in teams)}/{len(teams)}")
         try:
             games = regular_season_game_ids(store)
-            reqs = [r for g in games for r in plan.game_requests(g)]
+            reqs = [r for g in games for r in plan.game_requests(g)
+                    if r.endpoint not in OPTIONAL_ENDPOINTS]
+            rot = [r for g in games for r in plan.game_requests(g) if r.endpoint in OPTIONAL_ENDPOINTS]
             print(f"game:   {sum(store.has(r.endpoint, r.params) for r in reqs)}/{len(reqs)} "
-                  f"({len(games)} games)")
+                  f"({len(games)} games: play-by-play + box score)")
+            print(f"rotation (optional): {sum(store.has(r.endpoint, r.params) for r in rot)}/{len(rot)}")
         except KeyError:
             print("game:   (team game log not fetched yet)")
         for endpoint, params, error in store.failures():
-            print(f"FAILED {endpoint} {params}: {error}")
+            if endpoint not in OPTIONAL_ENDPOINTS:
+                print(f"FAILED {endpoint} {params}: {error}")
         return 0
 
     if args.smoke:
@@ -178,13 +201,13 @@ def main():
         game_reqs = [r for g in games for r in plan.game_requests(g)]
         run(store, game_reqs, f"games ({len(games)})", check_schema=True, pacer=pacer)
         # One more pass over anything that failed (usually requests caught in a throttle window).
-        missing = [r for r in everything + game_reqs if not store.has(r.endpoint, r.params)]
+        missing = required_missing(store, everything + game_reqs)
         if missing:
             run(store, missing, "second pass over failed requests", check_schema=True, pacer=pacer)
     except Throttled as e:
         print(f"\n{e}")
         return 1
-    missing = [r for r in everything + game_reqs if not store.has(r.endpoint, r.params)]
+    missing = required_missing(store, everything + game_reqs)
     if missing:
         print(f"\n{len(missing)} request(s) still missing. Run this script again later to retry "
               "just those; if the same ones keep failing, run --status and send me the output.")
