@@ -1,19 +1,30 @@
-"""Per-player on-court accounting from play-by-play (playbyplayv3) + rotations (gamerotation).
+"""Per-player on-court accounting from play-by-play (playbyplayv3) and box scores.
 
 Several doc 02/03 denominators are "... while this player was on the floor"
 (team missed FGA, opponent rebounds, defensive possessions, ...). No public
 endpoint publishes those directly, so they are counted here event by event.
 
-Who is on the floor comes from gamerotation stints (tenths of a second of game
-time). Events that share a timestamp with a substitution (free throws around a
-sub, mostly) are assigned using the play-by-play order: an event listed after
-that team's substitution action at the same clock belongs to the new lineup.
+Lineups are tracked by walking the play-by-play in order:
+  * Q1 starters come from the box score (starters carry a position).
+  * Later periods' starters are not logged (between-period changes are silent):
+    they come from gamerotation when that response exists, otherwise from the
+    first players of each team seen acting in the period before being subbed
+    in, completed if needed from the previous period's closing lineup.
+  * stats.nba.com logs a substitution as personId = player going out and
+    description "SUB: <in> FOR <out>"; the incoming player is matched by name
+    against that team's box score.
+A team whose lineup can't be resolved to exactly five players has its events
+skipped (counted in GameAccount.events_unresolved) instead of guessed.
+
+Team events (team rebounds/turnovers, timeouts) carry teamId 0 and the team's
+id in personId.
 
 Possessions use the standard estimate FGA - OREB + TOV + 0.44*FTA, applied to
 the on-court counts (offense: own team's events; defense: the opponent's).
 """
 
 import re
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -27,6 +38,11 @@ ON_COURT_FIELDS = (
 
 _CLOCK = re.compile(r"PT(\d+)M(\d+(?:\.\d+)?)S")
 _FT_OF = re.compile(r"Free Throw (\d+) of (\d+)$")
+_SUB = re.compile(r"^SUB:\s*(.+?)\s+FOR\s+(.+?)\s*$")
+
+# Action types whose actor is necessarily on the floor (blank = steal/block rows).
+_PRESENCE_ACTIONS = {"Made Shot", "Missed Shot", "Free Throw", "Rebound", "Turnover",
+                     "Jump Ball", "Heave", "Violation", ""}
 
 
 def _int(x):
@@ -35,6 +51,11 @@ def _int(x):
         return None
     v = int(x)
     return v or None
+
+
+def norm_name(s):
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
 def period_start(period):
@@ -54,15 +75,18 @@ def clock_tenths(clock, period):
     return period_end(period) - int(round(remaining * 10))
 
 
-@dataclass
-class GameAccount:
-    game_id: str
-    # (player_id, team_id) -> field -> count
-    on_court: dict = field(default_factory=lambda: defaultdict(lambda: defaultdict(float)))
-    # player_id -> turnover subType -> count
-    turnovers_by_type: dict = field(default_factory=lambda: defaultdict(lambda: defaultdict(int)))
-    events_total: int = 0
-    events_unresolved: int = 0
+def is_made_ft(row):
+    if row["shotResult"] in ("Made", "Missed"):
+        return row["shotResult"] == "Made"
+    return not str(row["description"]).upper().startswith("MISS")
+
+
+def is_reboundable_final_ft(sub_type):
+    """Last free throw of a regular trip (e.g. '2 of 2'): the only FT whose miss is live.
+    Technical, flagrant and clear-path free throws do not end in a rebound."""
+    m = _FT_OF.search(str(sub_type))
+    return bool(m) and "Flagrant" not in str(sub_type) and "Clear Path" not in str(sub_type) \
+        and m.group(1) == m.group(2)
 
 
 @dataclass(frozen=True)
@@ -82,118 +106,230 @@ def stints_from_rotation(rotation_frames):
     return out
 
 
-def _on_court(stint, t, period, after_sub):
-    ps, pe = period_start(period), period_end(period)
-    if abs(stint.t_in - t) <= 1:
-        return abs(t - ps) <= 1 or (abs(t - pe) > 1 and after_sub)
-    if abs(stint.t_out - t) <= 1:
-        return abs(t - pe) <= 1 or (abs(t - ps) > 1 and not after_sub)
-    return stint.t_in < t < stint.t_out
+@dataclass
+class GameAccount:
+    game_id: str
+    # (player_id, team_id) -> field -> count
+    on_court: dict = field(default_factory=lambda: defaultdict(lambda: defaultdict(float)))
+    # player_id -> turnover subType -> count
+    turnovers_by_type: dict = field(default_factory=lambda: defaultdict(lambda: defaultdict(int)))
+    seconds_on: dict = field(default_factory=lambda: defaultdict(float))
+    events_total: int = 0
+    events_unresolved: int = 0
+    diagnostics: dict = field(default_factory=lambda: defaultdict(int))
 
 
-def is_made_ft(row):
-    if row["shotResult"] in ("Made", "Missed"):
-        return row["shotResult"] == "Made"
-    return not str(row["description"]).upper().startswith("MISS")
+class _Game:
+    def __init__(self, box, stints):
+        self.teams = sorted({int(t) for t in box["teamId"]})
+        if len(self.teams) != 2:
+            raise ValueError(f"box score has {len(self.teams)} teams")
+        self.other = {self.teams[0]: self.teams[1], self.teams[1]: self.teams[0]}
+        self.team_of_player = {}
+        self.played = set()
+        self.starters = defaultdict(list)
+        self.names = defaultdict(lambda: defaultdict(set))   # team -> normalized name -> pids
+        for row in box.itertuples(index=False):
+            pid, tid = int(row.personId), int(row.teamId)
+            self.team_of_player[pid] = tid
+            self.names[tid][norm_name(row.familyName)].add(pid)
+            if str(row.minutes or "").strip() not in ("", "0", "0:00", "00:00"):
+                self.played.add(pid)
+            if str(row.position or "").strip():
+                self.starters[tid].append(pid)
+        self.stints = stints
+
+    def team(self, row):
+        t = _int(row["teamId"])
+        if t in self.other:
+            return t
+        p = _int(row["personId"])
+        return p if p in self.other else None
+
+    def player(self, row):
+        p = _int(row["personId"])
+        return p if p in self.team_of_player else None
+
+    def learn_names(self, rows):
+        for r in rows:
+            p = self.player(r)
+            if p is not None and r.get("playerName"):
+                self.names[self.team_of_player[p]][norm_name(r["playerName"])].add(p)
+
+    def name_candidates(self, team, name):
+        return {p for p in self.names[team].get(norm_name(name), set()) if p in self.played}
 
 
-def is_reboundable_final_ft(sub_type):
-    """Last free throw of a regular trip (e.g. '2 of 2'): the only FT whose miss is live.
-    Technical, flagrant and clear-path free throws do not end in a rebound."""
-    m = _FT_OF.search(str(sub_type))
-    return bool(m) and "Flagrant" not in str(sub_type) and "Clear Path" not in str(sub_type) \
-        and m.group(1) == m.group(2)
+def _is_presence(row):
+    if row["actionType"] in _PRESENCE_ACTIONS:
+        return True
+    return row["actionType"] == "Foul" and "Technical" not in str(row["subType"])
 
 
-def account_game(game_id, pbp, stints, box_player_ids):
-    """Count on-court team/opponent events for every player in one game."""
+def _period_starters_from_rotation(g, team, period):
+    if not g.stints:
+        return None
+    ps = period_start(period)
+    on = [s.player_id for s in g.stints if s.team_id == team and s.t_in - 1 <= ps < s.t_out - 1]
+    return set(on) if len(on) == 5 else None
+
+
+def _infer_period_starters(g, team, period_rows, prev_end, diag):
+    """Players seen acting (or being subbed out) before any sub brings them in."""
+    seen, subbed_in = [], set()
+    for r in period_rows:
+        if g.team(r) != team:
+            continue
+        if r["actionType"] == "Substitution":
+            m = _SUB.match(str(r["description"]))
+            if m:
+                subbed_in |= g.name_candidates(team, m.group(1))
+            p = g.player(r)
+        else:
+            p = g.player(r) if _is_presence(r) else None
+        if p is not None and g.team_of_player[p] == team and p not in subbed_in and p not in seen:
+            seen.append(p)
+        if len(seen) == 5:
+            return set(seen)
+    if prev_end is None:
+        return None
+    fill = [p for p in prev_end if p not in seen and p not in subbed_in]
+    if len(seen) + len(fill) == 5:
+        diag["period_starters_completed_from_previous_period"] += 1
+        return set(seen) | set(fill)
+    return None
+
+
+def account_game(game_id, pbp, box, stints=None):
+    """Count on-court team/opponent events and seconds for every player in one game."""
     acc = GameAccount(game_id)
-    by_team = defaultdict(list)
-    for s in stints:
-        by_team[s.team_id].append(s)
-    teams = list(by_team)
-    if len(teams) != 2:
-        raise ValueError(f"game {game_id}: rotation has {len(teams)} teams")
-    other = {teams[0]: teams[1], teams[1]: teams[0]}
+    diag = acc.diagnostics
+    g = _Game(box, stints)
+    rows = pbp.to_dict("records")
+    g.learn_names(rows)
 
-    # Substitution actions by (team, period, clock) -> earliest row position
-    pbp = pbp.reset_index(drop=True)
-    sub_pos = {}
-    for pos, row in pbp.iterrows():
-        if row["actionType"] == "Substitution" and _int(row["teamId"]):
-            key = (_int(row["teamId"]), int(row["period"]), row["clock"])
-            sub_pos.setdefault(key, pos)
+    by_period = defaultdict(list)
+    for i, r in enumerate(rows):
+        by_period[int(r["period"])].append(i)
 
-    lineup_cache = {}
+    lineup = {}
+    prev_end = {t: None for t in g.teams}
+    last_miss_team = None
 
-    def lineup(team, pos, row):
-        period = int(row["period"])
-        t = clock_tenths(row["clock"], period)
-        sp = sub_pos.get((team, period, row["clock"]))
-        after = sp is not None and sp < pos
-        key = (team, t, period, after)
-        if key not in lineup_cache:
-            players = [s.player_id for s in by_team[team] if _on_court(s, t, period, after)]
-            if len(players) != 5:
-                alt = [s.player_id for s in by_team[team] if _on_court(s, t, period, not after)]
-                players = alt if len(alt) == 5 else None
-            lineup_cache[key] = players
-        return lineup_cache[key]
+    def valid():
+        return all(lineup.get(t) is not None and len(lineup[t]) == 5 for t in g.teams)
 
-    def credit(pos, row, team, team_field, opp_field, amount=1.0):
+    def credit(team, team_field, opp_field):
         acc.events_total += 1
-        own, opp = lineup(team, pos, row), lineup(other[team], pos, row)
-        if own is None or opp is None:
+        if not valid():
             acc.events_unresolved += 1
             return
         if team_field:
-            for p in own:
-                acc.on_court[(p, team)][team_field] += amount
+            for p in lineup[team]:
+                acc.on_court[(p, team)][team_field] += 1
         if opp_field:
-            for p in opp:
-                acc.on_court[(p, other[team])][opp_field] += amount
+            for p in lineup[g.other[team]]:
+                acc.on_court[(p, g.other[team])][opp_field] += 1
 
-    last_miss_team = None
-    for pos, row in pbp.iterrows():
-        action = row["actionType"]
-        team = _int(row["teamId"])
-        if team is not None and team not in other:
-            continue
-        person = _int(row["personId"]) or 0
-        if team is None and action in ("Made Shot", "Missed Shot", "Free Throw"):
-            continue
+    def resolve_incoming(team, name, idx):
+        cands = g.name_candidates(team, name) - (lineup.get(team) or set())
+        if len(cands) == 1:
+            return next(iter(cands))
+        if len(cands) > 1:   # same surname: the one who shows up next is the one who came in
+            for r in rows[idx + 1:]:
+                p = g.player(r)
+                if p in cands and (_is_presence(r) or r["actionType"] == "Substitution"):
+                    diag["subs_resolved_by_lookahead"] += 1
+                    return p
+        return None
 
-        if action in ("Made Shot", "Missed Shot") and _int(row["isFieldGoal"]) == 1:
-            credit(pos, row, team, "team_fga", "opp_fga")
-            if action == "Missed Shot":
-                credit(pos, row, team, "team_missed_fga", "opp_missed_fga")
-                last_miss_team = team
-            else:
-                last_miss_team = None
-        elif action == "Free Throw":
-            credit(pos, row, team, "team_fta", "opp_fta")
-            if is_made_ft(row):
-                last_miss_team = None
-            else:
-                last_miss_team = team
-                if is_reboundable_final_ft(row["subType"]):
-                    # opp_missed_final_ft is credited to the defending (rebounding) side
-                    credit(pos, row, team, None, "opp_missed_final_ft")
-        elif action == "Rebound":
-            if person in box_player_ids and last_miss_team is not None and team is not None:
-                if team == last_miss_team:
-                    credit(pos, row, team, "team_oreb", "opp_oreb")
-                else:
-                    credit(pos, row, team, "team_dreb", "opp_dreb")
-            last_miss_team = None
-        elif action == "Turnover":
-            sub = str(row["subType"] or "")
-            if "No Turnover" in sub or team is None:
+    for period in sorted(by_period):
+        idxs = by_period[period]
+        period_rows = [rows[i] for i in idxs]
+        for team in g.teams:
+            if period == 1 and len(g.starters[team]) == 5:
+                lineup[team] = set(g.starters[team])
                 continue
-            credit(pos, row, team, "team_tov", "opp_tov")
-            if person in box_player_ids:
-                acc.turnovers_by_type[person][sub] += 1
-            last_miss_team = None
+            starters = _period_starters_from_rotation(g, team, period)
+            if starters is None:
+                starters = _infer_period_starters(g, team, period_rows, prev_end[team], diag)
+                diag["period_starters_inferred"] += 1
+            if starters is None:
+                diag["period_starters_unresolved"] += 1
+            lineup[team] = starters
+
+        t_prev = period_start(period)
+        for idx in idxs:
+            r = rows[idx]
+            t = clock_tenths(r["clock"], period)
+            if t > t_prev:
+                for team in g.teams:
+                    if lineup.get(team) is not None and len(lineup[team]) == 5:
+                        for p in lineup[team]:
+                            acc.seconds_on[p] += (t - t_prev) / 10
+                t_prev = t
+
+            action = r["actionType"]
+            team = g.team(r)
+            person = g.player(r)
+
+            if action == "Substitution":
+                if team is None or lineup.get(team) is None:
+                    continue
+                m = _SUB.match(str(r["description"]))
+                incoming = resolve_incoming(team, m.group(1), idx) if m else None
+                if incoming is None or person not in lineup[team]:
+                    diag["subs_unresolved"] += 1
+                    lineup[team] = None
+                    continue
+                lineup[team] = (lineup[team] - {person}) | {incoming}
+                continue
+
+            if team is None:
+                continue
+            if _int(r["isFieldGoal"]) == 1:
+                credit(team, "team_fga", "opp_fga")
+                made = r["shotResult"] == "Made" or action == "Made Shot"
+                if made:
+                    last_miss_team = None
+                else:
+                    credit(team, "team_missed_fga", "opp_missed_fga")
+                    last_miss_team = team
+            elif action == "Free Throw":
+                credit(team, "team_fta", "opp_fta")
+                if is_made_ft(r):
+                    last_miss_team = None
+                else:
+                    last_miss_team = team
+                    if is_reboundable_final_ft(r["subType"]):
+                        # credited to the defending (rebounding) side
+                        credit(team, None, "opp_missed_final_ft")
+            elif action == "Rebound":
+                if person in g.played and last_miss_team is not None:
+                    if team == last_miss_team:
+                        credit(team, "team_oreb", "opp_oreb")
+                    else:
+                        credit(team, "team_dreb", "opp_dreb")
+                last_miss_team = None
+            elif action == "Turnover":
+                sub = str(r["subType"] or "")
+                if "No Turnover" in sub:
+                    continue
+                credit(team, "team_tov", "opp_tov")
+                if person in g.played:
+                    acc.turnovers_by_type[person][sub] += 1
+                last_miss_team = None
+
+            if person is not None and _is_presence(r) and valid() \
+                    and person not in lineup[g.team_of_player[person]]:
+                diag["actor_not_in_tracked_lineup"] += 1
+
+        end = period_end(period)
+        for team in g.teams:
+            if lineup.get(team) is not None and len(lineup[team]) == 5:
+                for p in lineup[team]:
+                    acc.seconds_on[p] += (end - t_prev) / 10
+            prev_end[team] = lineup.get(team)
     return acc
 
 

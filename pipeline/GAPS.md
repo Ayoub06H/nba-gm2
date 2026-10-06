@@ -229,9 +229,14 @@ These are computed exactly as the docs say. Each produces a result that looks un
 
 1. **Gamma prior form:** doc 02's formula `(points + k) / (possessions + k/θ)` is a valid posterior
    mean only if θ is the prior *mean* (rate = k/θ), so that's how it's fit.
-2. **On-floor counts and possessions:** "while on the floor" counts come from play-by-play plus
-   official rotation stints. Possessions use the standard estimate FGA − OREB + TOV + 0.44·FTA
-   applied to on-floor counts.
+2. **On-floor counts and possessions:** "while on the floor" counts come from walking the
+   play-by-play in order. Q1 starters come from the box score. Later quarters' starters come from
+   rotation data when stats.nba.com serves it (it fails for most games), otherwise from the first
+   players seen acting in the quarter. Incoming substitutes are matched by name, since the
+   play-by-play gives only the outgoing player's ID. Events whose lineup can't be pinned to five
+   players are skipped rather than guessed. The build prints the share skipped and checks every
+   player's reconstructed minutes against official box-score minutes. Possessions use the
+   standard estimate FGA − OREB + TOV + 0.44·FTA applied to on-floor counts.
 3. **Rebounds:** ORB% and DRB% denominators count player rebounds only (team rebounds excluded),
    matching the box-score convention. Numerators are official box-score totals.
 4. **Priors and percentiles:** priors are fit on players with any opportunities, unweighted, with

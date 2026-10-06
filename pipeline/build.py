@@ -91,6 +91,14 @@ def build(cache_path, out_path):
     share = lg.pbp_events_unresolved / max(lg.pbp_events_total, 1)
     print(f"on-court events: {lg.pbp_events_total:,}, lineup unresolved: "
           f"{lg.pbp_events_unresolved:,} ({share:.3%})")
+    d = lg.pbp_diagnostics
+    n_pg = max(d.get("player_games", 0), 1)
+    print(f"lineup check vs box-score minutes: mean error "
+          f"{d.get('minutes_abs_error_sum', 0) / n_pg:.2f} min per player-game; "
+          f"{int(d.get('player_games_off_by_over_1_min', 0))} of {int(n_pg)} player-games off by > 1 min")
+    for k in sorted(d):
+        if k not in ("player_games", "minutes_abs_error_sum", "player_games_off_by_over_1_min"):
+            print(f"  {k}: {int(d[k])}")
     if share > MAX_UNRESOLVED_EVENT_SHARE:
         raise SystemExit("lineup reconstruction failed on too many events; aborting")
 
@@ -144,6 +152,7 @@ def build(cache_path, out_path):
         "rostered_players": str(len(roster)),
         "pbp_events": str(lg.pbp_events_total),
         "pbp_events_unresolved": str(lg.pbp_events_unresolved),
+        "lineup_minutes_mean_abs_error": f"{lg.pbp_diagnostics.get('minutes_abs_error_sum', 0) / max(lg.pbp_diagnostics.get('player_games', 0), 1):.4f}",
         "wingspan_fit": f"a={a!r};b={b!r};n={n_fit}",
     }
     con.executemany("INSERT INTO meta VALUES (?, ?)", sorted(meta.items()))

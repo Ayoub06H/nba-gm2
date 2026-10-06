@@ -83,3 +83,10 @@ def test_games_and_status_tables(league_db):
     blocked = {r[0] for r in league_db.execute(
         "SELECT name FROM derivation_status WHERE status = 'blocked'")}
     assert {"durability", "consistency", "clutch", "position", "contract"} <= blocked
+
+
+def test_reconstructed_lineups_match_box_score_minutes(league_db):
+    # Most synthetic games have no rotation response, like the real API.
+    err = float(scalar(league_db, "SELECT value FROM meta WHERE key = 'lineup_minutes_mean_abs_error'"))
+    assert err < 0.01
+    assert scalar(league_db, "SELECT value FROM meta WHERE key = 'pbp_events_unresolved'") == "0"

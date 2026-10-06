@@ -29,6 +29,7 @@ class League:
     team_season_stats: pd.DataFrame
     pbp_events_total: int
     pbp_events_unresolved: int
+    pbp_diagnostics: dict        # lineup reconstruction counters + minutes check vs box score
 
 
 def _sum_by_player(df, id_col, cols):
@@ -107,22 +108,27 @@ def load_box_and_pbp(loader, game_ids):
     on_court = defaultdict(lambda: defaultdict(float))
     tov_types = defaultdict(lambda: defaultdict(int))
     total = unresolved = 0
+    diag = defaultdict(float)
     for gid in game_ids:
         box = loader.game_frame("box", gid, "PlayerStats")
-        box_ids = set()
+        box_minutes = {}
         for row in box.itertuples(index=False):
             pid, tid = int(row.personId), int(row.teamId)
             names[pid] = (str(row.firstName), str(row.familyName))
             mins = minutes_value(row.minutes)
             if mins > 0:
-                box_ids.add(pid)
+                box_minutes[pid] = mins
                 u = usage[(pid, tid)]
                 u[0] += 1
                 u[1] += 1 if str(row.position or "").strip() else 0
                 u[2] += mins
         pbp = loader.game_frame("pbp", gid, "PlayByPlay")
-        stints = stints_from_rotation(loader.game_frames("rotation", gid))
-        acc = account_game(gid, pbp, stints, box_ids)
+        try:
+            stints = stints_from_rotation(loader.game_frames("rotation", gid))
+            diag["games_with_rotation"] += 1
+        except KeyError:   # gamerotation is optional; most games don't have it
+            stints = None
+        acc = account_game(gid, pbp, box, stints)
         for key, fields in acc.on_court.items():
             for f, v in fields.items():
                 on_court[key][f] += v
@@ -131,6 +137,14 @@ def load_box_and_pbp(loader, game_ids):
                 tov_types[pid][sub] += n
         total += acc.events_total
         unresolved += acc.events_unresolved
+        for k, v in acc.diagnostics.items():
+            diag[k] += v
+        # Reconstructed minutes vs official box-score minutes, per player-game.
+        for pid, mins in box_minutes.items():
+            err = abs(acc.seconds_on.get(pid, 0.0) / 60 - mins)
+            diag["player_games"] += 1
+            diag["minutes_abs_error_sum"] += err
+            diag["player_games_off_by_over_1_min"] += err > 1.0
 
     team_usage = pd.DataFrame(
         [(p, t, gp, gs, m) for (p, t), (gp, gs, m) in usage.items()],
@@ -142,7 +156,7 @@ def load_box_and_pbp(loader, game_ids):
     tov = pd.DataFrame(
         [(p, sub, n) for p, d in tov_types.items() for sub, n in d.items()],
         columns=["player_id", "sub_type", "n"])
-    return team_usage, names, oc.astype(float), tov, total, unresolved
+    return team_usage, names, oc.astype(float), tov, total, unresolved, dict(diag)
 
 
 def load_games(loader):
@@ -258,7 +272,7 @@ def load_shots(loader):
 
 def assemble(loader):
     games = load_games(loader)
-    team_usage, names, oc, tov, total, unresolved = load_box_and_pbp(loader, games["game_id"])
+    team_usage, names, oc, tov, total, unresolved, diag = load_box_and_pbp(loader, games["game_id"])
     return League(
         teams=load_teams(),
         roster=load_roster(loader),
@@ -271,4 +285,5 @@ def assemble(loader):
         team_season_stats=load_team_season_stats(loader),
         pbp_events_total=total,
         pbp_events_unresolved=unresolved,
+        pbp_diagnostics=diag,
     )

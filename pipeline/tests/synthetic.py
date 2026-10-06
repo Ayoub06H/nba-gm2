@@ -56,13 +56,15 @@ class SyntheticLeague:
         actions, stints = [], []
         n = [0]
 
-        def act(period, t, team, person, action_type, sub_type="", desc="", result=None, fg=0,
-                shot_value=None):
+        def act(period, t, team, person, action_type, sub_type="", desc="", result="", fg=0,
+                shot_value=0):
+            # Real v3 shape: team-level events have teamId 0 and the team id in personId.
             n[0] += 1
+            name = f"Last{person}" if person in self.team_of else ""
             actions.append({"actionNumber": n[0], "clock": clock(period, t), "period": period,
-                            "teamId": team, "personId": person, "actionType": action_type,
-                            "subType": sub_type, "description": desc, "shotResult": result,
-                            "isFieldGoal": fg, "shotValue": shot_value})
+                            "teamId": team or 0, "personId": person, "playerName": name,
+                            "actionType": action_type, "subType": sub_type, "description": desc,
+                            "shotResult": result, "isFieldGoal": fg, "shotValue": shot_value})
             return n[0]
 
         def lineups(team, period, half):
@@ -81,22 +83,24 @@ class SyntheticLeague:
                     t_out = base + 7200 if p in second else base + 3600
                     stints.append((team, p, t_in, t_out))
                     self.minutes[p] += (t_out - t_in) / 600
-            act(period, 0, None, 0, "period", "start")
+            act(period, 0, 0, 0, "period", "start")
             offense = home if period % 2 else away
             for i in range(48):
                 t = i * 150 + 70
                 half = 0 if t < 3600 else 1
                 if i == 24:
                     for team in (home, away):
-                        outs = set(lineups(team, period, 0)) - set(lineups(team, period, 1))
-                        for p in sorted(outs):
-                            act(period, 3600, team, p, "Substitution", "", "SUB")
+                        outs = sorted(set(lineups(team, period, 0)) - set(lineups(team, period, 1)))
+                        ins = sorted(set(lineups(team, period, 1)) - set(lineups(team, period, 0)))
+                        for p_out, p_in in zip(outs, ins):
+                            act(period, 3600, team, p_out, "Substitution", "",
+                                f"SUB: Last{p_in} FOR Last{p_out}")
                 defense = away if offense == home else home
                 off_on, def_on = lineups(offense, period, half), lineups(defense, period, half)
                 self._possession(act, period, t, offense, defense, off_on, def_on, points,
                                  game_id, date)
                 offense = defense
-            act(period, 7200, None, 0, "period", "end")
+            act(period, 7200, 0, 0, "period", "end")
 
         self._box_minutes_and_gp(game_id, home, away, stints)
         self.games.append((game_id, date, home, away, points[home], points[away]))
@@ -114,6 +118,9 @@ class SyntheticLeague:
     def _possession(self, act, period, t, offense, defense, off_on, def_on, points, game_id, date):
         rng, box = self.rng, self.box
         r = rng.random()
+        if r < 0.015:
+            act(period, t, 0, offense, "Turnover", "Shot Clock Turnover", "Team Turnover: Shot Clock")
+            return
         if r < 0.13:
             p = int(rng.choice(off_on))
             sub = TOV_TYPES[rng.integers(len(TOV_TYPES))]
@@ -156,6 +163,9 @@ class SyntheticLeague:
             b["FGA"] += 1
             b["FG3A"] += is3
             b[f"ZONE|{zone}|FGA"] += 1
+            if not made and attempt == 2:
+                act(period, t + attempt * 20, 0, defense, "Rebound", "Unknown", "Team Rebound")
+                return
             if made:
                 b["FGM"] += 1
                 b["FG3M"] += is3
@@ -321,6 +331,8 @@ def write_store(path, seed=0):
         date = f"2025-11-{1 + g // 15:02d}"
         pbp, rot, box = lg.play(gid, date, lg.teams[hi], lg.teams[ai])
         for req, payload in zip(plan.game_requests(gid), (pbp, rot, box)):
+            if req.endpoint == "gamerotation" and g % 4:
+                continue   # like stats.nba.com, rotation is missing for most games
             store.put(req.endpoint, req.params, payload)
     for req, payload in lg.payloads().items():
         store.put(req.endpoint, req.params, payload)

@@ -352,9 +352,15 @@ HUSTLE_TENDENCY_COMPONENTS = (
 
 
 def _zscore(x):
+    """League z-score. If every player has the same value (e.g. a shrinkage prior that
+    collapsed to a point mass), every deviation is exactly zero, so z = 0, not 0/0."""
     x = np.asarray(x, dtype=float)
     ok = ~np.isnan(x)
+    if not ok.any():
+        return np.full(x.shape, np.nan)
     mu, sd = x[ok].mean(), x[ok].std()
+    if sd <= 1e-9 * max(1.0, abs(mu)):
+        return np.where(ok, 0.0, np.nan)
     return (x - mu) / sd
 
 

@@ -77,3 +77,8 @@ def test_every_locked_field_is_declared_once():
     assert len(attrs) == len(set(attrs)) == 28     # doc 01: 28 rated attributes
     assert len(tends) == len(set(tends)) == 21     # doc 03: 24 listed, 3 parked
     assert {t.key for t in derive.TRAITS} == set(derive.TIER_NAMES)
+
+
+def test_zscore_of_a_constant_component_is_zero_not_nan():
+    z = derive._zscore([0.3, 0.3 + 1e-18, 0.3, np.nan])
+    assert list(z[:3]) == [0.0, 0.0, 0.0] and np.isnan(z[3])
