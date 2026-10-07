@@ -159,21 +159,39 @@ def load_box_and_pbp(loader, game_ids):
     return team_usage, names, oc.astype(float), tov, total, unresolved, dict(diag)
 
 
+def box_home_away(loader, game_id):
+    """(home_team_id, away_team_id) as stated by the game's box score."""
+    req = next(r for r in plan.game_requests(game_id) if r.endpoint == "boxscoretraditionalv3")
+    bs = loader.store.get(req.endpoint, req.params)["boxScoreTraditional"]
+    return int(bs["homeTeam"]["teamId"]), int(bs["awayTeam"]["teamId"])
+
+
 def load_games(loader):
+    """One row per game: two team rows from the game log (date, points), home/away from
+    the box score (the game log's 'vs.'/'@' text is not reliable for neutral-site games)."""
     df = loader.frame(f"team_game_log_{SEASON}")
-    home = df[df["MATCHUP"].str.contains(" vs. ", regex=False)]
-    away = df[df["MATCHUP"].str.contains(" @ ", regex=False)]
-    g = home.merge(away, on="GAME_ID", suffixes=("_h", "_a"))
-    if len(g) != df["GAME_ID"].nunique():
-        raise ValueError("team game log: could not pair every game into home/away rows")
-    return pd.DataFrame({
-        "game_id": g["GAME_ID"].astype(str),
-        "game_date": g["GAME_DATE_h"].astype(str),
-        "home_team_id": g["TEAM_ID_h"].astype(int),
-        "away_team_id": g["TEAM_ID_a"].astype(int),
-        "home_points": g["PTS_h"].astype(int),
-        "away_points": g["PTS_a"].astype(int),
-    }).sort_values(["game_date", "game_id"]).reset_index(drop=True)
+    rows, problems = [], []
+    for gid, g in df.groupby(df["GAME_ID"].astype(str)):
+        pts = {int(t): p for t, p in zip(g["TEAM_ID"], g["PTS"])}
+        if len(g) != 2 or len(pts) != 2:
+            problems.append(f"{gid}: {len(g)} rows {g['MATCHUP'].tolist()}")
+            continue
+        try:
+            home, away = box_home_away(loader, gid)
+        except KeyError:
+            problems.append(f"{gid}: box score not downloaded")
+            continue
+        if {home, away} != set(pts):
+            problems.append(f"{gid}: box score teams {home}/{away} vs game log {sorted(pts)}")
+            continue
+        rows.append((gid, str(g["GAME_DATE"].iloc[0]), home, away,
+                     None if pd.isna(pts[home]) else int(pts[home]),
+                     None if pd.isna(pts[away]) else int(pts[away])))
+    if problems:
+        raise ValueError("team game log: cannot build these games:\n  " + "\n  ".join(problems[:20]))
+    return pd.DataFrame(rows, columns=["game_id", "game_date", "home_team_id", "away_team_id",
+                                       "home_points", "away_points"]) \
+        .sort_values(["game_date", "game_id"]).reset_index(drop=True)
 
 
 def load_team_season_stats(loader):

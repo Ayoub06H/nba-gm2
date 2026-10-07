@@ -305,9 +305,10 @@ class SyntheticLeague:
                   f"6-{int(rng.integers(1, 12))}", str(int(rng.integers(180, 260))), "2000-01-01", "3"]
                  for k, p in enumerate(self.roster[t])])
         log_rows = []
-        for (gid, date, h, a, hp, ap) in self.games:
+        for k, (gid, date, h, a, hp, ap) in enumerate(self.games):
+            # the first game mimics a neutral-site listing: both rows say "vs."
             log_rows.append([h, gid, date, f"T{h} vs. T{a}", hp])
-            log_rows.append([a, gid, date, f"T{a} @ T{h}", ap])
+            log_rows.append([a, gid, date, f"T{a} {'vs.' if k == 0 else '@'} T{h}", ap])
         out[f"team_game_log_{SEASON}"] = rs("LeagueGameLog", ["TEAM_ID", "GAME_ID", "GAME_DATE",
                                                              "MATCHUP", "PTS"], log_rows)
         for name in ("team_base_totals", "team_advanced_totals"):

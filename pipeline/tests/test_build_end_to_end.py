@@ -90,3 +90,10 @@ def test_reconstructed_lineups_match_box_score_minutes(league_db):
     err = float(scalar(league_db, "SELECT value FROM meta WHERE key = 'lineup_minutes_mean_abs_error'"))
     assert err < 0.01
     assert scalar(league_db, "SELECT value FROM meta WHERE key = 'pbp_events_unresolved'") == "0"
+
+
+def test_home_and_away_come_from_the_box_score(league_db):
+    # game 1 is listed "vs." on both sides in the synthetic game log, like neutral-site games
+    home, away = league_db.execute(
+        "SELECT home_team_id, away_team_id FROM games WHERE game_id = '0022500001'").fetchone()
+    assert home != away
