@@ -192,15 +192,39 @@ pulls every input the proposals need, except where noted).
 - **Not part of Phase 1's done definition.** The model has the stub; the table is empty until a
   source is named.
 
+### G22. Help Defense Aggressiveness: its source column is empty.
+- **Doc:** 03 Defensive approach, Help Defense Aggressiveness (`HELP_FGA ÷ (MATCHUP_FGA + HELP_FGA)`).
+- **Found in the real 2025-26 data:** stats.nba.com still publishes the `HELP_FGA`, `HELP_FGM`,
+  `HELP_BLK` and `HELP_FG_PERC` columns, but they are 0 in all 151,960 season-matchup rows. Every
+  other column in that table is filled. The tendency has no real data as specified, so the
+  build marks it failed.
+- **Proposed:** shots he defended as the closest defender that weren't taken by his own matchup:
+  `(D_FGA − MATCHUP_FGA) ÷ D_FGA`, where `D_FGA` comes from the defender dashboard (Overall).
+  This can dip below 0 when matchup tracking credits him with more shots than closest-defender
+  tracking does, so it would also need a rule for that (e.g. use `max(0, …)`, or a different
+  proxy). Both inputs are already downloaded.
+
+### G23. Pass-First vs Score-First isn't a proportion in the real data.
+- **Doc:** 03 On-ball creation, Pass-First vs Score-First (`Passes Made ÷ Touches`).
+- **Found in the real 2025-26 data:** 6 players have more passes than touches in the NBA's own
+  tracking, and not only tiny samples: Nicolas Batum has 1,409 passes on 1,210 touches, Royce
+  O'Neale 3,266 on 3,154, Gary Harris 585 on 568. Most likely inbound passes count as passes but
+  not as touches. Beta-Binomial needs successes ≤ opportunities, so the build marks it failed.
+- **Proposed:** the pass share of on-ball decisions,
+  `Passes Made ÷ (Passes Made + FGA + turnovers)`. It's bounded by construction, and every input is
+  already downloaded.
+
 ## Implemented as written, but needs your confirmation (F)
 
 These are computed exactly as the docs say. Each produces a result that looks unintended.
 
 - **F1. Foul/Contact-Seeking (03):** FTA ÷ FGA isn't a proportion (FTA can exceed FGA, e.g. low-usage
   bigs), so Beta-Binomial can't apply. If any real player has FTA > FGA, the build marks this
-  tendency **failed** (NULL for everyone) rather than clipping it. The synthetic test league
-  triggers exactly this case. Possible fixes: FTA ÷ (FTA + FGA), or free-throw trips ÷ shooting
-  possessions.
+  tendency **failed** (NULL for everyone) rather than clipping it. **Confirmed in the real
+  2025-26 data:** Dwight Powell (112 FTA on 101 FGA over 63 games), Alex Antetokounmpo and Grant
+  Nelson. Proposed fix: free-throw trips ÷ (FGA + free-throw trips), i.e. how often a shooting
+  chance ends at the line. Trips (each "1 of n" free throw) come from the play-by-play already
+  downloaded. A simpler alternative is FTA ÷ (FGA + FTA).
 - **F2. Defensive Foul Aggression (03):** "personal fouls" (box score PF) includes offensive fouls.
   Defensive-only fouls would come from the play-by-play.
 - **F3. Box-Out vs Leak-Out (03):** the denominator as written ("opponent FGA + FTA ending in a
