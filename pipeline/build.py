@@ -99,8 +99,15 @@ def build(cache_path, out_path):
     for k in sorted(d):
         if k not in ("player_games", "minutes_abs_error_sum", "player_games_off_by_over_1_min"):
             print(f"  {k}: {int(d[k])}")
+    if lg.pbp_examples:
+        log = Path(cache_path).parent / "lineup_diagnostics.txt"
+        log.write_text("\n".join(lg.pbp_examples), encoding="utf-8")
+        print(f"  sample unresolved substitutions ({len(lg.pbp_examples)} written to {log}):")
+        for e in lg.pbp_examples[:12]:
+            print(f"    {e}")
     if share > MAX_UNRESOLVED_EVENT_SHARE:
-        raise SystemExit("lineup reconstruction failed on too many events; aborting")
+        raise SystemExit("lineup reconstruction failed on too many events; aborting "
+                         "(send the lines above)")
 
     # Population: everyone who played a 2025-26 regular-season game plus every
     # rostered player. Priors are fit on players with opportunities; everyone

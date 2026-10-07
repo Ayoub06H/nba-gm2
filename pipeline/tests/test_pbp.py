@@ -177,7 +177,7 @@ def test_unresolvable_lineup_skips_events_instead_of_guessing():
                         e1])
     acc = account_game("g5", pbp, STANDARD_BOX)
     assert acc.diagnostics["subs_unresolved"] == 1
-    assert acc.events_unresolved == 1
+    assert acc.events_unresolved == 1          # only 4 of 5 ever identified: never guessed
     assert (102, A) not in acc.on_court
 
 
@@ -193,3 +193,35 @@ def test_possession_estimate():
 ])
 def test_reboundable_final_ft(sub_type, expected):
     assert is_reboundable_final_ft(sub_type) is expected
+
+
+def test_lineup_recovers_once_the_unknown_substitute_shows_up():
+    s1, e1 = period_marks(1)
+    pbp = pd.DataFrame([
+        s1,
+        act(2, "PT06M00.00S", 1, A, 101, "Substitution", "", "SUB: Nobody FOR A1"),
+        act(3, "PT05M50.00S", 1, A, 102, "Made Shot", "Layup", "A2 Layup", "Made", 1),   # unknown 5th
+        act(4, "PT05M00.00S", 1, A, 106, "Foul", "Personal", "A6 P.FOUL"),               # there he is
+        act(5, "PT04M00.00S", 1, A, 103, "Made Shot", "Layup", "A3 Layup", "Made", 1),
+        e1,
+    ])
+    acc = account_game("g6", pbp, STANDARD_BOX)
+    assert acc.diagnostics["subs_unresolved"] == 1
+    assert acc.diagnostics["lineups_recovered_mid_period"] >= 1
+    # the shot at 5:50 is attributed once 106 is identified as the fifth player
+    assert c(acc, 106, A)["team_fga"] == 2
+    assert acc.events_unresolved == 0
+    assert any("incoming name not found" in e for e in acc.examples)
+
+
+def test_initial_name_form_matches():
+    bx = box([(100 + k, A, f"A{k}", k <= 5, "10:00") for k in range(1, 6)]
+             + [(107, A, "Williams", False, "5:00")]
+             + [(200 + k, B, f"B{k}", True, "10:00") for k in range(1, 6)])
+    bx["nameI"] = [f"X. {n}" for n in bx["familyName"]]
+    s, e = period_marks(1)
+    pbp = pd.DataFrame([s, act(2, "PT06M00.00S", 1, A, 101, "Substitution", "", "SUB: X. Williams FOR A1"),
+                        act(3, "PT05M00.00S", 1, A, 107, "Made Shot", "Layup", "Layup", "Made", 1), e])
+    acc = account_game("g7", pbp, bx)
+    assert acc.diagnostics.get("subs_unresolved", 0) == 0
+    assert c(acc, 107, A)["team_fga"] == 1

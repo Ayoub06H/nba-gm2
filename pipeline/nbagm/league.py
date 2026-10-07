@@ -30,6 +30,7 @@ class League:
     pbp_events_total: int
     pbp_events_unresolved: int
     pbp_diagnostics: dict        # lineup reconstruction counters + minutes check vs box score
+    pbp_examples: list           # sample unresolved substitutions
 
 
 def _sum_by_player(df, id_col, cols):
@@ -109,6 +110,7 @@ def load_box_and_pbp(loader, game_ids):
     tov_types = defaultdict(lambda: defaultdict(int))
     total = unresolved = 0
     diag = defaultdict(float)
+    examples = []
     for gid in game_ids:
         box = loader.game_frame("box", gid, "PlayerStats")
         box_minutes = {}
@@ -139,6 +141,7 @@ def load_box_and_pbp(loader, game_ids):
         unresolved += acc.events_unresolved
         for k, v in acc.diagnostics.items():
             diag[k] += v
+        examples.extend(acc.examples)
         # Reconstructed minutes vs official box-score minutes, per player-game.
         for pid, mins in box_minutes.items():
             err = abs(acc.seconds_on.get(pid, 0.0) / 60 - mins)
@@ -156,7 +159,7 @@ def load_box_and_pbp(loader, game_ids):
     tov = pd.DataFrame(
         [(p, sub, n) for p, d in tov_types.items() for sub, n in d.items()],
         columns=["player_id", "sub_type", "n"])
-    return team_usage, names, oc.astype(float), tov, total, unresolved, dict(diag)
+    return team_usage, names, oc.astype(float), tov, total, unresolved, dict(diag), examples
 
 
 def box_home_away(loader, game_id):
@@ -290,7 +293,8 @@ def load_shots(loader):
 
 def assemble(loader):
     games = load_games(loader)
-    team_usage, names, oc, tov, total, unresolved, diag = load_box_and_pbp(loader, games["game_id"])
+    team_usage, names, oc, tov, total, unresolved, diag, examples = load_box_and_pbp(
+        loader, games["game_id"])
     return League(
         teams=load_teams(),
         roster=load_roster(loader),
@@ -304,4 +308,5 @@ def assemble(loader):
         pbp_events_total=total,
         pbp_events_unresolved=unresolved,
         pbp_diagnostics=diag,
+        pbp_examples=examples,
     )

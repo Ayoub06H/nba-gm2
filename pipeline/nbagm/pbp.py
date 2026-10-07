@@ -117,6 +117,7 @@ class GameAccount:
     events_total: int = 0
     events_unresolved: int = 0
     diagnostics: dict = field(default_factory=lambda: defaultdict(int))
+    examples: list = field(default_factory=list)   # unresolved substitutions, for the build log
 
 
 class _Game:
@@ -133,6 +134,9 @@ class _Game:
             pid, tid = int(row.personId), int(row.teamId)
             self.team_of_player[pid] = tid
             self.names[tid][norm_name(row.familyName)].add(pid)
+            name_i = getattr(row, "nameI", None)
+            if name_i:
+                self.names[tid][norm_name(name_i)].add(pid)
             if str(row.minutes or "").strip() not in ("", "0", "0:00", "00:00"):
                 self.played.add(pid)
             if str(row.position or "").strip():
@@ -153,8 +157,11 @@ class _Game:
     def learn_names(self, rows):
         for r in rows:
             p = self.player(r)
-            if p is not None and r.get("playerName"):
-                self.names[self.team_of_player[p]][norm_name(r["playerName"])].add(p)
+            if p is None:
+                continue
+            for key in ("playerName", "playerNameI"):
+                if r.get(key):
+                    self.names[self.team_of_player[p]][norm_name(r[key])].add(p)
 
     def name_candidates(self, team, name):
         return {p for p in self.names[team].get(norm_name(name), set()) if p in self.played}
@@ -174,30 +181,39 @@ def _period_starters_from_rotation(g, team, period):
     return set(on) if len(on) == 5 else None
 
 
-def _infer_period_starters(g, team, period_rows, prev_end, diag):
-    """Players seen acting (or being subbed out) before any sub brings them in."""
-    seen, subbed_in = [], set()
-    for r in period_rows:
+def _infer_lineup(g, team, rows_after, known_on=(), known_off=(), fallback=None):
+    """Lineup at a point in time: players seen acting (or being subbed out) after it,
+    before any substitution brings them in. Completed from `fallback` (the last known
+    lineup) only when that fills exactly the missing places."""
+    seen = [p for p in known_on]
+    subbed_in = set(known_off)
+    for r in rows_after:
         if g.team(r) != team:
             continue
         if r["actionType"] == "Substitution":
             m = _SUB.match(str(r["description"]))
-            if m:
-                subbed_in |= g.name_candidates(team, m.group(1))
             p = g.player(r)
+            if m:
+                subbed_in |= g.name_candidates(team, m.group(1)) - ({p} if p else set())
         else:
             p = g.player(r) if _is_presence(r) else None
         if p is not None and g.team_of_player[p] == team and p not in subbed_in and p not in seen:
             seen.append(p)
         if len(seen) == 5:
-            return set(seen)
-    if prev_end is None:
-        return None
-    fill = [p for p in prev_end if p not in seen and p not in subbed_in]
+            return set(seen), False
+    if fallback is None:
+        return None, False
+    fill = [p for p in fallback if p not in seen and p not in subbed_in]
     if len(seen) + len(fill) == 5:
+        return set(seen) | set(fill), True
+    return None, False
+
+
+def _infer_period_starters(g, team, period_rows, prev_end, diag):
+    lineup, completed = _infer_lineup(g, team, period_rows, fallback=prev_end)
+    if completed:
         diag["period_starters_completed_from_previous_period"] += 1
-        return set(seen) | set(fill)
-    return None
+    return lineup
 
 
 def account_game(game_id, pbp, box, stints=None):
@@ -213,6 +229,8 @@ def account_game(game_id, pbp, box, stints=None):
         by_period[int(r["period"])].append(i)
 
     lineup = {}
+    last_known = {t: None for t in g.teams}   # most recent fully known lineup per team
+    departed = {t: set() for t in g.teams}    # subbed out since then (never used to fill)
     prev_end = {t: None for t in g.teams}
     last_miss_team = None
 
@@ -232,21 +250,52 @@ def account_game(game_id, pbp, box, stints=None):
                 acc.on_court[(p, g.other[team])][opp_field] += 1
 
     def resolve_incoming(team, name, idx):
-        cands = g.name_candidates(team, name) - (lineup.get(team) or set())
+        named = g.name_candidates(team, name)
+        cands = named - (lineup.get(team) or set())
         if len(cands) == 1:
-            return next(iter(cands))
+            return next(iter(cands)), None
         if len(cands) > 1:   # same surname: the one who shows up next is the one who came in
             for r in rows[idx + 1:]:
                 p = g.player(r)
                 if p in cands and (_is_presence(r) or r["actionType"] == "Substitution"):
                     diag["subs_resolved_by_lookahead"] += 1
-                    return p
-        return None
+                    return p, None
+            return None, "incoming name matches several players, none seen afterwards"
+        if named:
+            return None, "incoming player already in tracked lineup"
+        return None, "incoming name not found in box score"
+
+    def substitute(team, r, idx, period_idxs):
+        m = _SUB.match(str(r["description"]))
+        if not m:
+            return None, "unparseable description"
+        current = lineup.get(team)
+        out = g.player(r)
+        if current is not None and out not in current:
+            # occasionally the ids are the other way round; fall back to the names
+            by_name = g.name_candidates(team, m.group(2)) & current
+            out = next(iter(by_name)) if len(by_name) == 1 else None
+            if out is None:
+                return None, "outgoing player not in tracked lineup"
+        incoming, why = resolve_incoming(team, m.group(1), idx)
+        if incoming is None:
+            return None, why
+        if current is None:
+            return None, "lineup already unknown"
+        return (current - {out}) | {incoming}, None
+
+    def recover(team, idx, period_idxs, known_on=(), known_off=(), fallback=None):
+        after = [rows[i] for i in period_idxs if i > idx]
+        new, _ = _infer_lineup(g, team, after, known_on, known_off, fallback)
+        if new:
+            diag["lineups_recovered_mid_period"] += 1
+        return new
 
     for period in sorted(by_period):
         idxs = by_period[period]
         period_rows = [rows[i] for i in idxs]
         for team in g.teams:
+            departed[team] = set()
             if period == 1 and len(g.starters[team]) == 5:
                 lineup[team] = set(g.starters[team])
                 continue
@@ -261,6 +310,14 @@ def account_game(game_id, pbp, box, stints=None):
         t_prev = period_start(period)
         for idx in idxs:
             r = rows[idx]
+            for team in g.teams:
+                if lineup.get(team) is None:
+                    # rows from here on (this one included) pin down who is on the floor now
+                    fb = last_known[team] - departed[team] if last_known[team] else None
+                    lineup[team] = recover(team, idx - 1, idxs, known_off=departed[team], fallback=fb)
+                if lineup.get(team) is not None:
+                    last_known[team] = lineup[team]
+                    departed[team] = set()
             t = clock_tenths(r["clock"], period)
             if t > t_prev:
                 for team in g.teams:
@@ -274,15 +331,26 @@ def account_game(game_id, pbp, box, stints=None):
             person = g.player(r)
 
             if action == "Substitution":
-                if team is None or lineup.get(team) is None:
+                if team is None:
                     continue
-                m = _SUB.match(str(r["description"]))
-                incoming = resolve_incoming(team, m.group(1), idx) if m else None
-                if incoming is None or person not in lineup[team]:
+                new, why = substitute(team, r, idx, idxs)
+                if new is not None and len(new) == 5:
+                    lineup[team] = new
+                    continue
+                if why != "lineup already unknown":
                     diag["subs_unresolved"] += 1
-                    lineup[team] = None
-                    continue
-                lineup[team] = (lineup[team] - {person}) | {incoming}
+                    diag[f"subs_unresolved: {why}"] += 1
+                    if len(acc.examples) < 25:
+                        acc.examples.append(
+                            f"{game_id} Q{period} {r['clock']} team {team}: {r['description']!r} "
+                            f"-> {why}")
+                # Rebuild the lineup from what happens next instead of giving up on the period.
+                if person:
+                    departed[team].add(person)
+                fb = (lineup.get(team) or last_known[team] or set()) - departed[team]
+                lineup[team] = recover(team, idx, idxs, known_off=departed[team], fallback=fb or None)
+                if lineup[team] is not None:
+                    last_known[team], departed[team] = lineup[team], set()
                 continue
 
             if team is None:
