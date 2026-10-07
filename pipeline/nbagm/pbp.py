@@ -134,9 +134,11 @@ class _Game:
             pid, tid = int(row.personId), int(row.teamId)
             self.team_of_player[pid] = tid
             self.names[tid][norm_name(row.familyName)].add(pid)
-            name_i = getattr(row, "nameI", None)
-            if name_i:
-                self.names[tid][norm_name(name_i)].add(pid)
+            # play-by-play sometimes uses another form: "J. Williams", or a given name
+            # where the box score files the family name first (e.g. Yang Hansen)
+            for alt in (getattr(row, "nameI", None), getattr(row, "firstName", None)):
+                if alt:
+                    self.names[tid][norm_name(alt)].add(pid)
             if str(row.minutes or "").strip() not in ("", "0", "0:00", "00:00"):
                 self.played.add(pid)
             if str(row.position or "").strip():

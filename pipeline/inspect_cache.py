@@ -1,6 +1,7 @@
-"""Print how stats.nba.com formats play-by-play in your cache (for building the lineup parser).
+"""Print raw values from your cache so problems can be diagnosed without re-downloading.
 
-    python pipeline/inspect_cache.py
+    python pipeline/inspect_cache.py            # play-by-play format of one game
+    python pipeline/inspect_cache.py data       # inputs behind the tendencies that failed
 """
 
 import sys
@@ -19,6 +20,34 @@ pd.set_option("display.max_columns", 20)
 pd.set_option("display.max_colwidth", 45)
 
 store = RawStore(RAW_CACHE_PATH)
+
+if len(sys.argv) > 1 and sys.argv[1] == "data":
+    from nbagm import plan
+    from nbagm.frames import Loader
+    ld = Loader(store)
+    m = pd.concat([ld.frame(f"matchups_def_{t}") for t in plan.TEAM_IDS], ignore_index=True)
+    print(f"SEASON MATCHUPS: {len(m)} rows; columns: {list(m.columns)}")
+    print("column totals:")
+    print(m.select_dtypes("number").sum().to_string())
+    print("\nnon-null counts:")
+    print(m.notna().sum().to_string())
+    print("\nrows with the largest MATCHUP_FGA:")
+    print(m.sort_values("MATCHUP_FGA", ascending=False).head(5).to_string(index=False))
+    raw = store.get(ld._league["matchups_def_1610612737"].endpoint,
+                    ld._league["matchups_def_1610612737"].params)
+    print("\nraw headers:", raw.get("resultSets", raw.get("resultSet"))[0]["headers"]
+          if isinstance(raw.get("resultSets", raw.get("resultSet")), list)
+          else raw.get("resultSets", raw.get("resultSet"))["headers"])
+    touches = ld.frame("pt_Possessions")[["PLAYER_ID", "PLAYER_NAME", "TOUCHES"]]
+    passing = ld.frame("pt_Passing")[["PLAYER_ID", "PASSES_MADE"]]
+    tp = touches.merge(passing, on="PLAYER_ID")
+    print("\nPLAYERS WITH PASSES_MADE > TOUCHES:")
+    print(tp[tp["PASSES_MADE"] > tp["TOUCHES"]].to_string(index=False))
+    base = ld.frame("player_base_totals")
+    print("\nPLAYERS WITH FTA > FGA:")
+    print(base[base["FTA"] > base["FGA"]][["PLAYER_NAME", "GP", "MIN", "FGA", "FTA"]].to_string(index=False))
+    sys.exit(0)
+
 row = store._conn.execute(
     "SELECT params FROM raw WHERE endpoint = 'playbyplayv3' ORDER BY params LIMIT 1").fetchone()
 params = __import__("json").loads(row[0])

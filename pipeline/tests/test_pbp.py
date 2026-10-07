@@ -225,3 +225,16 @@ def test_initial_name_form_matches():
     acc = account_game("g7", pbp, bx)
     assert acc.diagnostics.get("subs_unresolved", 0) == 0
     assert c(acc, 107, A)["team_fga"] == 1
+
+
+def test_given_name_used_in_play_by_play_matches():
+    bx = box([(100 + k, A, f"A{k}", k <= 5, "10:00") for k in range(1, 6)]
+             + [(107, A, "Yang", False, "5:00")]
+             + [(200 + k, B, f"B{k}", True, "10:00") for k in range(1, 6)])
+    bx["firstName"] = ["F"] * 5 + ["Hansen"] + ["F"] * 5
+    s, e = period_marks(1)
+    pbp = pd.DataFrame([s, act(2, "PT06M00.00S", 1, A, 101, "Substitution", "", "SUB: Hansen FOR A1"),
+                        act(3, "PT05M00.00S", 1, A, 107, "Made Shot", "Layup", "Layup", "Made", 1), e])
+    acc = account_game("g8", pbp, bx)
+    assert acc.diagnostics.get("subs_unresolved", 0) == 0
+    assert c(acc, 107, A)["team_fga"] == 1
