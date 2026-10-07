@@ -160,7 +160,7 @@ def build(cache_path, out_path):
         "pbp_events": str(lg.pbp_events_total),
         "pbp_events_unresolved": str(lg.pbp_events_unresolved),
         "lineup_minutes_mean_abs_error": f"{lg.pbp_diagnostics.get('minutes_abs_error_sum', 0) / max(lg.pbp_diagnostics.get('player_games', 0), 1):.4f}",
-        "wingspan_fit": f"a={a!r};b={b!r};n={n_fit}",
+        "wingspan_fit": f"a={float(a):.6f};b={float(b):.6f};n={n_fit}",
     }
     con.executemany("INSERT INTO meta VALUES (?, ?)", sorted(meta.items()))
     con.executemany("INSERT INTO teams VALUES (?, ?, ?, ?)",

@@ -60,6 +60,7 @@ def league_requests():
     """Season-level requests (no per-game fan-out)."""
     s, rs = SEASON, SEASON_TYPE
     out = [
+        _req("player_index", "playerindex", season=s, league_id="00"),
         _req("player_base_totals", "leaguedashplayerstats", season=s,
              season_type_all_star=rs, measure_type_detailed_defense="Base",
              per_mode_detailed="Totals"),

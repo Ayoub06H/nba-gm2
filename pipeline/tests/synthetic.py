@@ -304,6 +304,12 @@ class SyntheticLeague:
                 [[t, p, f"First{p} Last{p}", str(k), "G" if k < 4 else "F" if k < 8 else "C",
                   f"6-{int(rng.integers(1, 12))}", str(int(rng.integers(180, 260))), "2000-01-01", "3"]
                  for k, p in enumerate(self.roster[t])])
+        everyone_idx = [p for ps in self.roster.values() for p in ps]
+        out["player_index"] = rs("PlayerIndex", ["PERSON_ID", "HEIGHT", "WEIGHT"],
+                                 [[p, "6-6", "215"] for p in everyone_idx])
+        first_team = self.teams[0]
+        rows_ = out[f"roster_{first_team}"]["resultSets"][0]["rowSet"]
+        rows_[0][6] = ""          # a roster row with no listed weight, like four real players
         log_rows = []
         for k, (gid, date, h, a, hp, ap) in enumerate(self.games):
             # the first game mimics a neutral-site listing: both rows say "vs."

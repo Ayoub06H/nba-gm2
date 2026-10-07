@@ -50,6 +50,7 @@ def _shot_locations(payload):
 # Columns the build reads, per request name prefix / endpoint. Checked at
 # gather time (smoke mode) and again before every build.
 REQUIRED_COLUMNS = {
+    "player_index": ("PlayerIndex", ["PERSON_ID", "HEIGHT", "WEIGHT"]),
     "player_base_totals": ("LeagueDashPlayerStats", [
         "PLAYER_ID", "TEAM_ID", "GP", "MIN", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA",
         "OREB", "DREB", "AST", "TOV", "STL", "BLK", "PF", "PTS"]),

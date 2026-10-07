@@ -235,6 +235,9 @@ These are computed exactly as the docs say. Each produces a result that looks un
   land in "Relentless" or "Lazy" from one event, which contradicts doc 04's own "thin samples can't
   produce an extreme tier". Players with zero minutes get no value (0 ÷ 0). Proposed: use each
   component's Beta-Binomial-shrunk rate, the same mechanism as the matching tendencies.
+  **Confirmed in the real 2025-26 data:** Brandon Clarke (about 20 minutes played) comes out at
+  z = +5.1, "Relentless", and Chris Mañon (46 minutes) at z = +4.8.
+
 - **F5. Streaky (04):** the shot log contains field goals only, so free throws aren't in the
   sequence. A sequence with all makes or all misses has run count = expectation and zero variance;
   its z is defined as 0 (no claim).
@@ -243,6 +246,25 @@ These are computed exactly as the docs say. Each produces a result that looks un
 - **F7. Ball Security (02):** Ben Taylor's Offensive Load can be ≤ 0 for players with almost no
   offensive involvement. That makes the Gamma-Poisson exposure non-positive, so those players are
   treated as zero exposure (they get the prior mean).
+
+## Observation from the real data (needs your view, not a bug)
+
+- **O1. Shrinkage is weak for some tendencies, by the docs' own method.** The Beta prior's
+  strength (α + β, roughly "how many league-average attempts each player starts with") comes out
+  of the real data. Where players genuinely differ a lot, it's small:
+  - Catch-and-Shoot vs Pull-Up: 3.5
+  - Pick-and-Roll Usage: 4.1
+  - Post-Up Frequency: 4.3
+  - Three-Point Attempt Rate: 4.4
+  - Rim Attempt Rate: 5.3
+  - Isolation Frequency: 7.2
+
+  So a 12-possession player who isolated every time ends at 0.64, and a 15-possession post-up
+  player at 0.78. That's the method working as doc 02 specifies (it shrinks hard only when
+  players are mostly alike), but it contradicts doc 02's own example that tiny samples are
+  "shrunk almost all the way" to the average. If that's unwanted, the docs need a different rule
+  (e.g. fitting the prior on players above a volume floor, which is itself a hand-picked
+  number). Otherwise it stays as is.
 
 ## Doc inconsistencies (wording, not blocking)
 

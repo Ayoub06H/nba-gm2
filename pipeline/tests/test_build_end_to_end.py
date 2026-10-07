@@ -97,3 +97,7 @@ def test_home_and_away_come_from_the_box_score(league_db):
     home, away = league_db.execute(
         "SELECT home_team_id, away_team_id FROM games WHERE game_id = '0022500001'").fetchone()
     assert home != away
+
+
+def test_missing_roster_weight_comes_from_the_player_index(league_db):
+    assert scalar(league_db, "SELECT COUNT(*) FROM players WHERE weight_lb IS NULL") == 0

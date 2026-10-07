@@ -90,6 +90,17 @@ def load_roster(loader):
     if not dup.empty:
         raise ValueError(f"players on more than one final roster: {dup[['PLAYER_ID', 'team_id']].values.tolist()}")
     names = r["PLAYER"].astype(str)
+    height = r["HEIGHT"].map(height_inches)
+    weight = pd.to_numeric(r["WEIGHT"], errors="coerce")
+    # A few roster rows have no listed height/weight; stats.nba.com's player index
+    # publishes the same listed measurements.
+    try:
+        idx = loader.frame("player_index").set_index("PERSON_ID")
+        pid = r["PLAYER_ID"].astype(int)
+        height = height.fillna(pid.map(idx["HEIGHT"].map(height_inches)))
+        weight = weight.fillna(pid.map(pd.to_numeric(idx["WEIGHT"], errors="coerce")))
+    except KeyError:
+        pass
     return pd.DataFrame({
         "player_id": r["PLAYER_ID"].astype(int),
         "team_id": r["team_id"].astype(int),
@@ -98,8 +109,8 @@ def load_roster(loader):
         "listed_position": r["POSITION"].astype(str),
         "birth_date": r["BIRTH_DATE"].astype(str),
         "experience": r["EXP"].astype(str),
-        "height_in": r["HEIGHT"].map(height_inches),
-        "weight_lb": pd.to_numeric(r["WEIGHT"], errors="coerce"),
+        "height_in": height.to_numpy(),
+        "weight_lb": weight.to_numpy(),
     })
 
 
