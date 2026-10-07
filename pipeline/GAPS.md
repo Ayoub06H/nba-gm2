@@ -294,7 +294,8 @@ These are computed exactly as the docs say. Each produces a result that looks un
    (`ShotClock Off` attempts stay in the denominator).
 7. **Wingspan regression:** fit on rostered players who have both a combine wingspan and a listed
    height, so the fitted and applied height are the same measure. A player's latest combine
-   measurement is used.
+   measurement is used. Height and weight are the NBA's listed values (team rosters, with the
+   player index as a fallback). **Approved by you as is.**
 8. **Scope of stats:** season stats cover the full regular season across teams. Starters and
    rotation use games started and minutes with the player's final team.
 9. **Season type:** regular season only.
