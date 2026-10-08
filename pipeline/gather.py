@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from nbagm import plan  # noqa: E402
-from nbagm.config import RAW_CACHE_PATH, SEASON  # noqa: E402
+from nbagm.config import DURABILITY_SEASONS, RAW_CACHE_PATH, SEASON  # noqa: E402
 from nbagm.frames import SchemaError, check_columns, tables  # noqa: E402
 from nbagm.rawstore import RawStore  # noqa: E402
 
@@ -49,11 +49,17 @@ class Throttled(RuntimeError):
 
 
 def endpoint_class(module_name):
-    module = importlib.import_module(f"nba_api.stats.endpoints.{module_name}")
+    """'leaguedashplayerstats' -> stats.nba.com endpoint; 'live.playbyplay' -> cdn.nba.com liveData."""
+    if module_name.startswith("live."):
+        package, attr = "nba_api.live.nba.endpoints", "endpoint_url"
+        module_name = module_name[len("live."):]
+    else:
+        package, attr = "nba_api.stats.endpoints", "endpoint"
+    module = importlib.import_module(f"{package}.{module_name}")
     for _, obj in inspect.getmembers(module, inspect.isclass):
-        if obj.__module__ == module.__name__ and hasattr(obj, "endpoint"):
+        if obj.__module__ == module.__name__ and hasattr(obj, attr):
             return obj
-    raise RuntimeError(f"no endpoint class in nba_api.stats.endpoints.{module_name}")
+    raise RuntimeError(f"no endpoint class in {package}.{module_name}")
 
 
 def fetch(req, retry_delays=RETRY_DELAYS_S):
@@ -141,13 +147,34 @@ def run(store, requests, label, check_schema=False, pacer=None):
     return failed
 
 
+def smoke_report(store, game_ids):
+    """Facts the docs ask --smoke to establish before the long run (docs 02, 03, 04)."""
+    out = ["SMOKE CHECKS:"]
+    for gid in game_ids:
+        try:
+            req = next(r for r in plan.game_requests(gid) if r.endpoint == "live.playbyplay")
+            acts = store.get(req.endpoint, req.params)["game"]["actions"]
+            keys = sorted({k for a in acts for k in a})
+            ids = [k for k in keys if k.endswith("PersonId")]
+            out.append(f"  live play-by-play {gid}: {len(acts)} actions; person-id fields: {ids}")
+        except KeyError:
+            out.append(f"  live play-by-play {gid}: NOT DOWNLOADED")
+        try:
+            req = next(r for r in plan.game_requests(gid) if r.endpoint == "boxscoresummaryv3")
+            inactive = tables(req.endpoint, store.get(req.endpoint, req.params))["InactivePlayers"]
+            out.append(f"  inactive list {gid}: {len(inactive)} players")
+        except KeyError:
+            out.append(f"  inactive list {gid}: NOT DOWNLOADED")
+    return out
+
+
 def required_missing(store, requests):
     return [r for r in requests
             if r.endpoint not in OPTIONAL_ENDPOINTS and not store.has(r.endpoint, r.params)]
 
 
-def regular_season_game_ids(store):
-    req = plan.by_name(plan.league_requests())[f"team_game_log_{SEASON}"]
+def regular_season_game_ids(store, season=SEASON):
+    req = plan.by_name(plan.league_requests())[f"team_game_log_{season}"]
     df = tables(req.endpoint, store.get(req.endpoint, req.params))["LeagueGameLog"]
     return sorted(df["GAME_ID"].astype(str).unique())
 
@@ -173,8 +200,15 @@ def main():
                     if r.endpoint not in OPTIONAL_ENDPOINTS]
             rot = [r for g in games for r in plan.game_requests(g) if r.endpoint in OPTIONAL_ENDPOINTS]
             print(f"game:   {sum(store.has(r.endpoint, r.params) for r in reqs)}/{len(reqs)} "
-                  f"({len(games)} games: play-by-play + box score)")
+                  f"({len(games)} games: play-by-play x2, box score, summary)")
             print(f"rotation (optional): {sum(store.has(r.endpoint, r.params) for r in rot)}/{len(rot)}")
+            for season in DURABILITY_SEASONS:
+                if season == SEASON:
+                    continue
+                dreqs = [r for g in regular_season_game_ids(store, season)
+                         for r in plan.durability_game_requests(g)]
+                print(f"durability {season}: {sum(store.has(r.endpoint, r.params) for r in dreqs)}"
+                      f"/{len(dreqs)}")
         except KeyError:
             print("game:   (team game log not fetched yet)")
         for endpoint, params, error in store.failures():
@@ -189,6 +223,12 @@ def main():
         games = regular_season_game_ids(store)[:2]
         failed += run(store, [r for g in games for r in plan.game_requests(g)],
                       "smoke: 2 games", check_schema=True)
+        for season in DURABILITY_SEASONS:
+            if season != SEASON:
+                old = regular_season_game_ids(store, season)[:1]
+                failed += run(store, [r for g in old for r in plan.durability_game_requests(g)],
+                              f"smoke: 1 game of {season}", check_schema=True)
+        print("\n" + "\n".join(smoke_report(store, games)))
         print("\nSMOKE OK - run without --smoke for the full pass." if failed == 0 else
               f"\nSMOKE FOUND {failed} PROBLEM(S) - send me the output above before the full run.")
         return 1 if failed else 0
@@ -200,6 +240,13 @@ def main():
         games = regular_season_game_ids(store)
         game_reqs = [r for g in games for r in plan.game_requests(g)]
         run(store, game_reqs, f"games ({len(games)})", check_schema=True, pacer=pacer)
+        for season in DURABILITY_SEASONS:
+            if season == SEASON:
+                continue
+            old = regular_season_game_ids(store, season)
+            dreqs = [r for g in old for r in plan.durability_game_requests(g)]
+            run(store, dreqs, f"durability {season} ({len(old)} games)", check_schema=True, pacer=pacer)
+            game_reqs += dreqs
         # One more pass over anything that failed (usually requests caught in a throttle window).
         missing = required_missing(store, everything + game_reqs)
         if missing:

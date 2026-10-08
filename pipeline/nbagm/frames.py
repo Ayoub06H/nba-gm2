@@ -9,7 +9,7 @@ import pandas as pd
 
 from . import plan
 
-V3_ENDPOINTS = {"playbyplayv3", "boxscoretraditionalv3"}
+V3_ENDPOINTS = {"playbyplayv3", "boxscoretraditionalv3", "boxscoresummaryv3"}
 
 
 class SchemaError(RuntimeError):
@@ -18,6 +18,8 @@ class SchemaError(RuntimeError):
 
 def tables(endpoint, payload):
     """All result sets in a payload, as {name: DataFrame}."""
+    if endpoint == "live.playbyplay":
+        return {"Actions": pd.DataFrame(payload["game"]["actions"])}
     if endpoint in V3_ENDPOINTS:
         from nba_api.stats.endpoints._parsers import get_parser_for_endpoint
         data_sets = get_parser_for_endpoint(endpoint, payload).get_data_sets()
@@ -76,6 +78,9 @@ REQUIRED_COLUMNS = {
                                     "HEIGHT", "WEIGHT", "BIRTH_DATE", "EXP"]),
     "team_game_log": ("LeagueGameLog", ["TEAM_ID", "GAME_ID", "GAME_DATE", "MATCHUP", "PTS"]),
     "combine_anthro": ("Results", ["PLAYER_ID", "WINGSPAN"]),
+    "live_pbp": ("Actions", ["actionNumber", "clock", "period", "teamId", "personId",
+                             "actionType", "subType"]),
+    "summary": ("InactivePlayers", ["personId", "teamId"]),
     "pbp": ("PlayByPlay", ["actionNumber", "clock", "period", "teamId", "personId",
                            "actionType", "subType", "description", "shotResult", "isFieldGoal"]),
     "rotation": (None, ["PERSON_ID", "TEAM_ID", "IN_TIME_REAL", "OUT_TIME_REAL"]),

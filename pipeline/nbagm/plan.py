@@ -136,10 +136,25 @@ def team_requests(team_id):
 
 
 def game_requests(game_id):
+    """Every request for one 2025-26 game. Play-by-play primary source is cdn.nba.com
+    liveData (it carries assist/block/steal/foul-drawn ids, doc 11); PlayByPlayV3 is the
+    backup. The box-score summary carries the inactive list (Durability, doc 04); V3 is
+    used because nba_api flags BoxScoreSummaryV2 data as missing from April 2025 on."""
     return [
         _req(f"pbp_{game_id}", "playbyplayv3", game_id=game_id),
         _req(f"rotation_{game_id}", "gamerotation", game_id=game_id),
         _req(f"box_{game_id}", "boxscoretraditionalv3", game_id=game_id),
+        _req(f"live_pbp_{game_id}", "live.playbyplay", game_id=game_id),
+        _req(f"summary_{game_id}", "boxscoresummaryv3", game_id=game_id),
+    ]
+
+
+def durability_game_requests(game_id):
+    """Earlier seasons of the Durability window only need appearances, DNP comments and
+    inactive lists (doc 04)."""
+    return [
+        _req(f"box_{game_id}", "boxscoretraditionalv3", game_id=game_id),
+        _req(f"summary_{game_id}", "boxscoresummaryv3", game_id=game_id),
     ]
 
 

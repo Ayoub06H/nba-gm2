@@ -7,6 +7,7 @@ from nbagm import plan
 def all_requests():
     reqs = plan.all_league_and_team_requests()
     reqs += plan.game_requests("0022500001")
+    reqs += plan.durability_game_requests("0022300001")
     return reqs
 
 

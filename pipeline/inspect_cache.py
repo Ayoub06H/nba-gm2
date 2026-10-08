@@ -2,6 +2,7 @@
 
     python pipeline/inspect_cache.py            # play-by-play format of one game
     python pipeline/inspect_cache.py data       # inputs behind the tendencies that failed
+    python pipeline/inspect_cache.py live       # cdn.nba.com play-by-play, inactive lists, DNP comments
 """
 
 import sys
@@ -20,6 +21,39 @@ pd.set_option("display.max_columns", 20)
 pd.set_option("display.max_colwidth", 45)
 
 store = RawStore(RAW_CACHE_PATH)
+
+if len(sys.argv) > 1 and sys.argv[1] == "live":
+    import json
+    from collections import Counter
+    row = store._conn.execute(
+        "SELECT params FROM raw WHERE endpoint = 'live.playbyplay' ORDER BY params LIMIT 1").fetchone()
+    params = json.loads(row[0])
+    acts = store.get("live.playbyplay", params)["game"]["actions"]
+    print("GAME", params["game_id"], "-", len(acts), "actions")
+    print("ALL KEYS:", sorted({k for a in acts for k in a}))
+    print("\nactionType / subType counts:")
+    for (t, st), n in sorted(Counter((a.get("actionType"), a.get("subType")) for a in acts).items(),
+                             key=lambda kv: -kv[1]):
+        print(f"  {t!s:<14} {st!s:<28} {n}")
+    skip = {"edited", "timeActual", "orderNumber", "xLegacy", "yLegacy", "x", "y", "side",
+            "scoreHome", "scoreAway", "periodType", "teamTricode", "playerName"}
+    seen = Counter()
+    print("\nSAMPLE ACTIONS (2 per type):")
+    for a in acts:
+        t = (a.get("actionType"), a.get("subType"))
+        if seen[t] < 2 and t[0] in ("substitution", "2pt", "3pt", "freethrow", "rebound", "turnover",
+                                    "foul", "block", "steal", "violation", "jumpball", "period"):
+            seen[t] += 1
+            print({k: v for k, v in a.items() if k not in skip})
+    srow = store._conn.execute(
+        "SELECT params FROM raw WHERE endpoint = 'boxscoresummaryv3' ORDER BY params LIMIT 1").fetchone()
+    if srow:
+        sp = json.loads(srow[0])
+        inactive = tables("boxscoresummaryv3", store.get("boxscoresummaryv3", sp))["InactivePlayers"]
+        print("\nINACTIVE LIST", sp["game_id"], ":\n", inactive.to_string(index=False))
+        box = tables("boxscoretraditionalv3", store.get("boxscoretraditionalv3", sp))["PlayerStats"]
+        print("\nBOX COMMENTS:", Counter(box["comment"].fillna("")).most_common())
+    sys.exit(0)
 
 if len(sys.argv) > 1 and sys.argv[1] == "data":
     from nbagm import plan
