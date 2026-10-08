@@ -59,7 +59,7 @@ Grounded in the two real, data-driven NBA role-classification systems actually u
 
 ## Position vs. role
 
-Position (PG–C) is not a behavioral category — it's a **physical sizing reference only**: it sets the baseline defensive matchup assignment (who guards who by size, before any scheme adjusts it) and feeds the raw Height/Wingspan numbers into move resolution (e.g. the reach-differential modifier in the possession-engine doc). It does **not** gate what lineups are legal to field. Role (the taxonomy above) is the actual behavioral assignment, and it's fully position-agnostic — matching the instinct that role matters more than position. A 6'8" forward who's genuinely a Primary Ball Handler is a legitimate "point forward"; that's not a new role, it's a role/position combination the taxonomy already covers without needing a dedicated name for it.
+Position (the NBA-published label G, G-F, F, F-C or C) is not a behavioral category — it's a **physical sizing reference only**: it sets the baseline defensive matchup assignment (who guards who by size, before any scheme adjusts it) and feeds the raw Height/Wingspan numbers into move resolution (e.g. the reach-differential modifier in the possession-engine doc). It does **not** gate what lineups are legal to field. Role (the taxonomy above) is the actual behavioral assignment, and it's fully position-agnostic — matching the instinct that role matters more than position. A 6'8" forward who's genuinely a Primary Ball Handler is a legitimate "point forward"; that's not a new role, it's a role/position combination the taxonomy already covers without needing a dedicated name for it.
 
 ## Multi-role tagging (how real hybrids work without inventing new categories)
 

@@ -4,55 +4,54 @@ Core design principle: attributes and tendencies are almost never used in isolat
 
 ## Two separate systems
 
-- **Attributes** — how *good* a player is at a skill (execution layer).
+- **Attributes** — how *good* a player is at a skill (execution layer). Where a skill has a meaningful volume (how much he does it, at what load), the rating includes it — see `02-attribute-derivation-formulas.md`.
 - **Tendencies** — how *often* a player chooses to do something, independent of whether it's wise (decision layer).
 
 ### How they interact (three-layer pipeline, not competing systems)
 
 1. **Tendency** decides *what gets attempted* this possession (e.g., does the player gamble for a steal, shoot early in the clock, drive vs. pull up).
-2. **IQ / Shot Selection** acts as a *quality gate* on that choice — given the game state, was this a good or bad moment to do the thing the tendency just picked. Same tendency value can produce very different outcomes depending on IQ (e.g., a high steal-gamble tendency paired with elite Defensive IQ = well-timed disruption; paired with poor Defensive IQ = reckless, out of position).
+2. **Offensive IQ / Defensive IQ** act as a *quality gate* on that choice — given the game state, was this a good or bad moment to do the thing the tendency just picked. Same tendency value can produce very different outcomes depending on IQ (e.g., a high steal-gamble tendency paired with elite Defensive IQ = well-timed disruption; paired with poor Defensive IQ = reckless, out of position).
 3. **Raw skill attribute** determines execution once the attempt happens (did the shot go in, was the finish successful, etc).
 
 This resolves what would otherwise look like overlap between "IQ" attributes and tendencies: tendency is amoral/neutral about quality; IQ determines whether that tendency was deployed well in the moment.
 
-## Attributes (locked)
+## Attributes (locked) — 27 rated, plus 3 unrated Measurables
 
 ### Measurables (raw data, not rated 0-99 — pure biometric inputs other calculations read from)
 - Height
 - Wingspan
 - Weight
 
-### Offense — Rim Scoring
+### Offense — Rim Scoring (5)
 - Driving Layup
 - Driving Dunk
 - Standing Dunk
 - Touch
 - Post Scoring
 
-### Offense — Shooting
+### Offense — Shooting (3)
 - Three Pointer
 - Mid Range
 - Free Throw
 
-### Offense — Playmaking
+### Offense — Playmaking (4)
 - Ball Handle
 - Passing Accuracy
 - Vision
-- Ball Security
-- Shot Selection
 - Offensive IQ
 
-### Defense
+### Defense (9)
 - Offensive Rebounding
 - Defensive Rebounding
 - Steals
+- Shot Blocking
 - Off-Ball Defense
 - On-Ball Defense
 - Post Defense
 - Rim Protection
 - Defensive IQ
 
-### Physicals
+### Physicals (6)
 - Speed
 - Acceleration
 - Lateral Quickness
@@ -63,7 +62,9 @@ This resolves what would otherwise look like overlap between "IQ" attributes and
 ### Explicitly rejected as standalone attributes (resolved as combinations instead)
 - Screen Setting (skill) — not modeled; screen-setting *willingness* lives as a tendency instead, quality comes from Strength + Offensive IQ
 - Hands / Lob Finishing — not modeled as its own stat; emerges from Vision/Passing Accuracy (passer) + Driving Dunk + Height/Weight/Vertical (finisher)
-- Shot Off-Dribble vs. Off-Catch as a *skill* — not modeled as separate skills; resolved as a tendency (how often each is attempted), with quality determined by combining Shooting + Ball Handle + Shot Selection
+- Shot Off-Dribble vs. Off-Catch as a *skill* — not modeled as separate skills; resolved as a tendency (how often each is attempted), with quality determined by combining Shooting + Ball Handle + Offensive IQ
+- **Ball Security** — removed. Turnover avoidance is covered by Ball Handle (handling turnovers, adjusted for the load he carries) and Passing Accuracy (bad-pass turnovers, adjusted for pass risk); a third overlapping turnover rating added nothing.
+- **Shot Selection** — removed as its own attribute. The quality of the shots a player chooses survives as one component of Offensive IQ.
 
 ## Tendencies (locked list — full derivation methodology now in `03-tendency-derivation-formulas.md`)
 
@@ -88,7 +89,6 @@ This resolves what would otherwise look like overlap between "IQ" attributes and
 
 ### Defensive approach
 - Gamble-for-Steals Frequency
-- Help Defense Aggressiveness
 - Defensive Foul Aggression
 
 ### Hustle / effort
@@ -99,6 +99,7 @@ This resolves what would otherwise look like overlap between "IQ" attributes and
 - Charge-Taking Willingness
 
 ### Parked — not computed in Phase 1 (see `03-tendency-derivation-formulas.md`'s "Parked" section for the exact reason each one hits a real public-data wall)
+- ~~Help Defense Aggressiveness~~ — the public help-capacity columns are empty; the signal lives in the Off-Ball Defense attribute
 - ~~Closeout Aggressiveness~~ — folded into the existing On-Ball Defense attribute instead; no separate public signal exists for "how often he closes out tight" independent of outcome
 - ~~Screen Navigation: Over vs. Under~~ — public play-by-play doesn't record ball-screen events at the needed granularity
 - ~~Switch Willingness~~ — public matchup data is season-aggregate only, not possession-level assignment tracking
@@ -107,13 +108,13 @@ This resolves what would otherwise look like overlap between "IQ" attributes and
 
 Three separate concerns, decoupled rather than solved by picking one scale:
 
-1. **Internal precision** — store a high-resolution value (float, or an internal 0-999 scale) that nothing rounds early. Needed because real-player calibration will fit attributes against continuous NBA statistical percentiles — rounding early would throw away real signal before it's even used.
-2. **Outcome curve shape** — this is what actually makes two values "feel different," not the scale. A non-linear (sigmoid/logistic-style) attribute→probability mapping, steep through the normal range and compressed at the extremes, means a gap like 87 vs. 80 can matter a lot or very little depending on where it sits in the distribution — which mirrors how real skill gaps work (a few points separates "very good" from "unguardable" near the top; the same numeric gap in the mushy middle means less).
-3. **Display scale** — decided last, and least important once 1 and 2 are solid. Chosen: **0-99 for display**, since it gives finer resolution for comparing players and matches the precision available from real-stat calibration. (0-20-style coarser display was considered but rejected as the fix for "values should feel different" — that problem belongs to the curve shape, not scale granularity. A coarser scale may still be worth revisiting later purely as a scouting/fog-of-war presentation choice, separate from this decision.)
+1. **Internal precision** — store a high-resolution value (unrounded `double`) that nothing rounds early. Needed because real-player calibration fits attributes against continuous NBA statistical percentiles — rounding early would throw away real signal before it's even used.
+2. **Rating mapping and the engine's outcome curve — two different things, kept apart.** A player's *rating* is simply `99 × mid-rank league percentile` of his attribute score (`02-attribute-derivation-formulas.md`); there is no reshaping curve at that step. The **non-linear (sigmoid/logistic-style) attribute→probability curve** is a separate thing that belongs to the engine: steep through the normal range and compressed at the extremes, so a gap like 87 vs. 80 can matter a lot or very little depending on where it sits in the distribution, which mirrors how real skill gaps work. Its numeric parameters are fit **per move in Phase 2** against real outcomes, not in Phase 1.
+3. **Display scale** — decided last, and least important once 1 and 2 are solid. Chosen: **0-99 for display**, since it gives finer resolution for comparing players and matches the precision available from real-stat calibration. (0-20-style coarser display was considered but rejected as the fix for "values should feel different" — that problem belongs to the engine curve, not scale granularity. A coarser scale may still be worth revisiting later purely as a scouting/fog-of-war presentation choice, separate from this decision.)
 
 Tendencies use a related but simpler scale, specified in `03-tendency-derivation-formulas.md`: a direct 0-1 real rate (Beta-Binomial-shrunk, not percentile-mapped or curve-reshaped), since a tendency already is a frequency rather than a skill level.
 
 ## Still open — and why neither item blocks Phase 1
 
 - **Whether every tendency listed above survives pruning**, or some turn out to be redundant once combination math is actually built. Every tendency has a real, computable stat behind it regardless (see `03-tendency-derivation-formulas.md`), so this is a post-hoc simplification question for Phase 2, not a derivation gap — Phase 1 computes all of them.
-- **Exact numeric shape/parameters of the non-linear attribute→probability curve** (steepness, inflection point) — this is not an unresolved design question, it's a Phase 1 *build step*: the curve is fit against the real percentile distribution once the full league's real attribute data is actually loaded, the same way the curve for any calibrated model is fit against its real data rather than guessed beforehand. Nothing here is left for Claude Code to invent — the shape (sigmoid-family, steep-middle/compressed-tails) is locked; only its specific numeric parameters wait on having the real distribution to fit against, which Phase 1 itself produces.
+- **Exact numeric parameters of the engine's attribute→probability curve** (steepness, inflection point, per move) — fit in Phase 2 against real outcomes. Phase 1 produces the ratings the curve will consume, and nothing in Phase 1 depends on its parameters.

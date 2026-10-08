@@ -12,7 +12,7 @@ Standard shape, same for every trait (5 positions):
 - 1–2 SD above → mild positive tier
 - 2+ SD above → strong positive tier
 
-Nothing here is hand-picked: the SD thresholds are a standard statistics convention, and which bucket a player falls into is purely a function of their real, derived data. Tier rarity falls out automatically — e.g. "Iron Man" is naturally uncommon because being 2+ SD from average is uncommon by definition, not because rarity was separately tuned.
+**How a trait value becomes SDs.** For every trait except Streaky, each player's final (shrunk) value `x_i` is converted to `z_i = (x_i − mean(x)) / SD(x)` across the whole population (for Consistency, within the player's peer cluster). The tier is read from `z_i` (positive = the better end of the trait). Nothing here is hand-picked: the SD thresholds are a standard statistics convention, and which bucket a player falls into is purely a function of real, derived data. Rarity falls out automatically.
 
 ## Hard rule: every trait must have a real statistical proxy to measure against
 
@@ -20,28 +20,45 @@ No trait exists without real data to ground it. Candidates considered and explic
 
 ## Locked trait list — every formula fully specified, nothing left to interpretation
 
-- **Durability** — real games missed vs. games scheduled, **over a trailing 3-season window** (not a single season, which is too small a sample to distinguish injury-prone from unlucky-once, and not full career, which is undefined for a rookie). A player with fewer than 3 real seasons uses career-to-date; the empirical-Bayes shrinkage below (same mechanism as everywhere else) naturally pulls a short career's estimate toward league average rather than needing a separate special case.
+- **Durability** — **availability**, derived from real game logs, over a **trailing 3-season window** (2023-24, 2024-25, 2025-26). A player with fewer than 3 real seasons uses career-to-date; the shrinkage below pulls a short career toward league average without a special case.
+  - *Roster games* = team games in which he appears for that team, either in the box score (including DNP rows) or on that game's inactive list.
+  - *Games missed* = roster games in which he is on the inactive list, or in the box score with a DNP comment other than "Coach's Decision". Coach's-decision DNPs are excluded because they are a choice about playing time, not availability; rest, injury and suspension are all counted, because the sim needs availability, not a diagnosis.
+  - Rate = games missed ÷ roster games (Beta-Binomial, S1 in doc 02). Higher shrunk rate = worse.
+  - Data: box scores (BoxScoreTraditional with the DNP `COMMENT`) and `BoxScoreSummaryV2` inactive-player lists for every game of the three seasons; `--smoke` verifies the inactive list and comment fields exist. `balldontlie.io` injury history is a supplement only and does not feed the number.
   Tiers: Hospitalized — Injury Prone — (no trait) — Sturdy — Iron Man
 
-- **Consistency** — real game-to-game statistical variance vs. league-average variance for *similar players*, where "similar" is players sharing the same primary role tag from the tactics doc's role taxonomy (a Spot-Up Shooter is compared to other Spot-Up Shooters, an Anchor Big to other Anchor Bigs) — reuses the role system already locked rather than inventing a separate grouping.
+- **Consistency** — game-to-game variance of one defined per-game number, compared with players of the same kind.
+  - *Per-game number:* Game Score per minute (Hollinger: `PTS + 0.4·FGM − 0.7·FGA − 0.4·(FTA − FTM) + 0.7·ORB + 0.3·DRB + STL + 0.7·AST + 0.7·BLK − 0.4·PF − TOV`, divided by minutes) in games with at least 10 minutes.
+  - *Peer clusters (replacing the role-tag comparison):* the tactics-doc role tags are assigned by the sim and cannot be derived before it runs, so peers are statistical. Fit Gaussian mixture models with k = 2…12 clusters on standardized features (height; published position as its ordinal index G=1, G-F=2, F=3, F-C=4, C=5; Offensive Load per100; 3PA rate; rim-attempt rate; AST% = assists ÷ teammates' made field goals while he is on the floor; TRB% = his rebounds ÷ all rebounds (both teams) while he is on the floor; BLK% and STL% as defined in doc 02), choose k by lowest BIC, and assign each player to his highest-probability cluster. The clustering is refit whenever the pipeline runs.
+  - *Variance and shrinkage:* each player's sample variance `s_i²` over `n_i` games is shrunk toward the cluster's variance with a Scaled-Inverse-Chi-Squared prior (`ν₀` and `s₀²` by method of moments on the cluster's per-player variances): `s_i²* = (ν₀·s₀² + (n_i − 1)·s_i²) / (ν₀ + n_i − 1)`.
+  - Trait value = −`ln s_i²*`, converted to SDs within the cluster (higher = steadier).
   Tiers: Erratic — Inconsistent — (no trait) — Steady — Metronome
 
 - **Clutch** — two-level computation, not a single comparison:
-  1. **The signal**: each player's own real clutch-situation stats (NBA's official clutch definition: last 5 minutes of the 4th quarter/OT, score within 5 points), compared against **that same player's own normal (non-clutch) stats** — a self-referential delta, not a comparison to league average. This is deliberate: clutch is about whether *this player specifically* performs differently under pressure, not whether he's good in an absolute sense late in games.
-  2. **The tier**: that self-delta (clutch output minus normal output, on the same real stat basis — e.g. true shooting % swing) is then compared against the **league-wide distribution of every player's own self-delta** to find how many SDs from the league-typical delta (usually near zero) this player sits. A player whose self-delta is 2+ SD worse than the league-typical delta is "Rattled"; 2+ SD better is "Ice in His Veins."
+  1. **The signal**: each player's own real clutch-situation output (NBA's official clutch definition: last 5 minutes of the 4th quarter/OT, score within 5 points; `LeagueDashPlayerClutch`) compared against **that same player's own non-clutch output** (full-season totals minus clutch totals) — a self-referential delta. On the stated stat basis, **points per true-shooting attempt** (`PTS ÷ (FGA + 0.44·FTA)`): `d_i = PPTSA_clutch − PPTSA_non-clutch`, with sampling variance `s_i² = σ²·(1/TSA_clutch + 1/TSA_non-clutch)`, where `TSA = FGA + 0.44·FTA` and `σ²` is the **per-attempt** variance of points, estimated by the ratio-estimator residual variance over every player-game in the league: `σ² = Σ_g (PTS_g − μ·TSA_g)² ÷ Σ_g TSA_g`, with `μ` the league mean points per true-shooting attempt.
+  2. **The tier**: `d_i` is shrunk with the Normal-Normal rule (S3 in doc 02, with the prior mean set to the league's mean delta, estimated, not assumed zero), and then converted to SDs against the league-wide distribution of every player's shrunk self-delta. 2+ SD worse than league-typical is "Rattled"; 2+ SD better is "Ice in His Veins."
   Tiers: Rattled — Shaky — (no trait) — Clutch — Ice in His Veins
 
-- **Hustle** — a composite, computed via the same blending methodology as `02-attribute-derivation-formulas.md`'s "Blending weights" Rule B (equal-weighted z-score average — there's no independent external target to regress against here, same situation as the Strength attribute). Components, each standardized to a league-wide z-score and averaged with equal weight: Deflections, Loose Balls Recovered, Charges Drawn, Screen Assists, and Contested Shots rate (all real official NBA Hustle Stats, each expressed as a rate over the relevant on-court exposure) plus the player's own Gamble-for-Steals, Loose Ball/Floor Dive Willingness, Offensive Rebound Crash Rate, and Charge-Taking Willingness tendency values (already real, shrunk rates from `03-tendency-derivation-formulas.md`). The resulting composite z-score average is this trait's "real value," which is then SD-tiered against the league exactly like every other trait.
+- **Hustle** — a composite using Rule B of `02-attribute-derivation-formulas.md` (equal-weighted z-score average — no independent external target exists). **Each underlying statistic enters exactly once, as its shrunk value.** Components:
+  1. Deflections per100 DEFPOSS (S2)
+  2. Loose balls recovered per100 total possessions (S2)
+  3. Charges drawn per100 DEFPOSS (S2)
+  4. Screen assists per100 OFFPOSS (S2)
+  5. Contested shots share = `CONTESTED_SHOTS ÷ opponent FGA while on the floor` (S1)
+  6. Offensive-rebound crash rate = `OREB_CHANCES ÷ team missed FGA while on the floor` (S1)
+  The earlier version also averaged in the Gamble-for-Steals, Loose Ball, Charge-Taking and Crash tendency values, which are the same statistics as components 1, 2, 3 and 6, so they were counted twice with double weight. Those tendencies still exist in `03-tendency-derivation-formulas.md` as how often he does it; this trait just reads the shrunk statistics once.
   Tiers: Lazy — Below Average — (no trait) — High Motor — Relentless
 
-- **Streaky** — one specific, named test, not a choice between options: the **Wald–Wolfowitz runs test**, applied to each player's real, ordered sequence of makes/misses from real shot-log data (all shot attempts, ordered within and across games). The test produces a z-score for how non-random the sequence's clustering is versus what pure chance would produce — and because this z-score is already standardized against the random-chance null by construction, it maps directly onto this trait's SD-tier scale with no separate league-comparison step needed (unlike every other trait here, which needs a population reference to establish what "average" means — the runs-test null hypothesis *is* that reference).
+- **Streaky** — one specific, named test: the **Wald–Wolfowitz runs test**, applied to each player's real, ordered sequence of field-goal makes and misses (all FGA, ordered by game date, period and game clock, concatenated across games; free throws excluded). With `n₁` makes, `n₂` misses and `R` runs, `z_runs = (R − μ) / σ` with `μ = 2n₁n₂/(n₁+n₂) + 1` and `σ² = (μ − 1)(μ − 2)/(n₁ + n₂ − 1)`. Fewer runs than chance means clustering, so **Streakiness z = −z_runs** (positive = more streaky). If `n₁ = 0` or `n₂ = 0` the z is 0. Because this z is already standardized against the random-chance null, it maps directly onto the SD-tier scale with no population reference needed.
+  Data: ShotChartDetail with game date, period and clock.
   Tiers: Even-Keeled — Level — (no trait) — Streaky — Heat Check
 
 ## Minimum sample handling — resolved via empirical-Bayes shrinkage, same mechanism as attributes
 
-Durability, Consistency, and Clutch all need enough real games/possessions before their underlying rate or variance estimate is trustworthy. Rather than a hand-picked "games played" threshold:
-- **Durability** (a real proportion — games missed ÷ games scheduled) uses the same **Beta-Binomial empirical-Bayes shrinkage** as attribute rate stats, with the prior fit via method-of-moments on the real league-wide distribution of the stat.
-- **Consistency and Clutch** (both variance/delta estimates, not simple proportions) use a **Scaled-Inverse-Chi-Squared (Inverse-Gamma) prior on variance**, fit the same way via method-of-moments on the real league-wide (or same-role, for Consistency) distribution of per-player variances/deltas.
-- **Streaky**'s runs-test z-score is inherently sample-size-aware already (the test's own variance term accounts for sequence length), so it needs no separate shrinkage step — a short sequence naturally produces a z-score close to zero (no claim of streakiness) rather than a false extreme.
+- **Durability** (a proportion) uses Beta-Binomial shrinkage with the prior fit via method-of-moments on the real league-wide distribution.
+- **Consistency** (a variance) uses a Scaled-Inverse-Chi-Squared prior on variance, fit per peer cluster.
+- **Clutch** (a difference with a known sampling variance) uses the Normal-Normal rule.
+- **Hustle**'s components are shrunk individually (S1/S2) before they are averaged.
+- **Streaky**'s runs-test z-score is inherently sample-size-aware, so it needs no separate shrinkage: a short sequence produces a z near zero.
 
-A rookie's three-game sample gets pulled hard toward the role/league-average value under all of the above; a ten-year veteran's estimate is trusted almost as observed. No player is excluded or given a placeholder — thin samples simply can't produce an extreme tier, because the real math won't let them.
+A rookie's three-game sample gets pulled hard toward the cluster/league-average value under all of the above; a ten-year veteran's estimate is trusted almost as observed. No player is excluded or given a placeholder — thin samples simply can't produce an extreme tier, because the real math won't let them.

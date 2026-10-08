@@ -44,7 +44,7 @@ Two different kinds of things, kept separate: **moves** (things a player activel
 - **Roll or pop** — the screener's choice right after setting a ball screen: dive to the rim (Finishing/Vertical) or pop for a jumper (Shooting) — a real, distinct decision, not just flavor
 
 ### Defensive moves
-- **Contest a shot** — perimeter closeout (On-Ball Defense) or rim contest (Rim Protection)
+- **Contest a shot** — perimeter closeout (On-Ball Defense) or rim contest (Rim Protection); a block is rolled first from Shot Blocking, and only an unblocked contest falls through to the miss probability
 - **Navigate a screen** — fight over, go under, switch, or hedge/show-and-recover (four distinct real schemes)
 - **Help / rotate** — leaves an assignment to help a teammate
 - **Recover / close the gap** — getting back to an assignment after helping or being beaten
