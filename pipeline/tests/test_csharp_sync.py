@@ -3,7 +3,9 @@
 import re
 from pathlib import Path
 
-from nbagm import derive
+from nbagm.attributes import ATTRIBUTES
+from nbagm.tendencies import TENDENCIES
+from nbagm.traits import TRAITS
 
 IDS_CS = Path(__file__).resolve().parents[2] / "src" / "NbaGm.Core" / "Model" / "Ids.cs"
 
@@ -16,12 +18,19 @@ def enum_keys(name):
 
 
 def test_attributes_match():
-    assert enum_keys("AttributeId") == [a.key for a in derive.ATTRIBUTES]
+    assert enum_keys("AttributeId") == list(ATTRIBUTES)
 
 
 def test_tendencies_match():
-    assert enum_keys("TendencyId") == [t.key for t in derive.TENDENCIES]
+    assert enum_keys("TendencyId") == [t.key for t in TENDENCIES]
 
 
 def test_traits_match():
-    assert enum_keys("TraitId") == [t.key for t in derive.TRAITS]
+    assert enum_keys("TraitId") == list(TRAITS)
+
+
+def test_position_labels_match():
+    from nbagm.league import POSITION_INDEX
+    cs = (IDS_CS.parent / "Position.cs").read_text()
+    for label, index in POSITION_INDEX.items():
+        assert f'["{label}"] = {index}' in cs

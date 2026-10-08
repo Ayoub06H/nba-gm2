@@ -1,67 +1,81 @@
 import numpy as np
 import pytest
 
-from nbagm.shrinkage import (ShrinkageError, fit_beta_binomial, fit_gamma_poisson,
-                             fit_scaled_inv_chi2)
+from nbagm.shrinkage import (ProportionViolation, fit_s1, fit_s2, fit_scaled_inv_chi2, s1, s2,
+                             s3, s4)
 
 
-def test_beta_binomial_recovers_known_prior():
+def test_s1_recovers_known_prior():
     rng = np.random.default_rng(0)
-    true = rng.beta(30, 70, size=4000)            # mean 0.3, alpha+beta = 100
+    true = rng.beta(30, 70, size=4000)
     n = rng.integers(50, 600, size=4000)
     s = rng.binomial(n, true)
-    prior = fit_beta_binomial(s, n)
+    prior = fit_s1(s, n)
     assert prior.mean == pytest.approx(0.3, abs=0.005)
     assert prior.alpha + prior.beta == pytest.approx(100, rel=0.15)
 
 
-def test_beta_binomial_shrinks_small_samples_harder():
-    rng = np.random.default_rng(1)
-    n = rng.integers(100, 500, size=500)
-    s = rng.binomial(n, rng.beta(20, 30, size=500))
-    prior = fit_beta_binomial(s, n)
-    small, large = prior.posterior_mean([5, 500], [5, 500])   # both 100% observed
-    assert small < large < 1.0
-    assert abs(small - prior.mean) < abs(large - prior.mean)
+def test_s1_guard_names_the_offenders():
+    with pytest.raises(ProportionViolation) as e:
+        s1([12, 3, 5], [10, 10, 10], name="FTA/FGA", ids=[101, 102, 103])
+    assert "FTA/FGA" in str(e.value) and "101" in str(e.value)
+    assert e.value.offenders[0][0] == 101
 
 
-def test_zero_opportunity_player_gets_prior_mean_and_is_excluded_from_fit():
-    s = np.array([10, 20, 30, 0])
-    n = np.array([100, 100, 100, 0])
-    prior = fit_beta_binomial(s, n)
-    assert prior.n_players == 3
-    assert prior.posterior_mean(0, 0) == pytest.approx(prior.mean)
+def test_s1_zero_opportunity_gets_prior_mean():
+    shrunk, prior = s1([10, 20, 30, 0], [100, 100, 100, 0])
+    assert prior.n_players == 3 and shrunk[3] == pytest.approx(prior.mean)
 
 
-def test_no_between_player_variance_gives_point_mass_at_mean():
-    prior = fit_beta_binomial([50, 50, 50], [100, 100, 100])
-    assert np.isinf(prior.alpha)
-    assert prior.posterior_mean([0], [10])[0] == pytest.approx(0.5)
-
-
-def test_beta_binomial_rejects_non_proportions():
-    with pytest.raises(ShrinkageError):
-        fit_beta_binomial([12, 3], [10, 10])
-
-
-def test_gamma_poisson_formula_matches_doc():
+def test_s2_formula_matches_doc():
     rng = np.random.default_rng(2)
-    rates = rng.gamma(shape=25, scale=1.0 / 25, size=3000)   # mean 1.0, k = 25
-    e = rng.integers(20, 300, size=3000)
-    x = rng.poisson(rates * e)
-    prior = fit_gamma_poisson(x, e)
-    assert prior.theta == pytest.approx(1.0, abs=0.02)
+    rates = rng.gamma(25, 1 / 25, size=3000)
+    e = rng.integers(20, 300, size=3000).astype(float)
+    c = rng.poisson(rates * e)
+    prior = fit_s2(c, e)
+    assert prior.m == pytest.approx(1.0, abs=0.02)
     assert prior.k == pytest.approx(25, rel=0.25)
-    # doc 02: shrunk = (points + k) / (possessions + k/theta)
-    assert prior.posterior_mean(30, 20) == pytest.approx((30 + prior.k) / (20 + prior.k / prior.theta))
+    shrunk, _ = s2(c, e)
+    assert shrunk[0] == pytest.approx((c[0] + prior.k) / (e[0] + prior.k / prior.m))
 
 
-def test_scaled_inv_chi2_recovers_prior_mean():
+def test_s3_shrinks_noisy_differences_toward_zero():
     rng = np.random.default_rng(3)
-    nu0, tau2 = 20.0, 4.0
-    sigma2 = nu0 * tau2 / rng.chisquare(nu0, size=5000)
-    dof = rng.integers(10, 80, size=5000)
-    s2 = sigma2 * rng.chisquare(dof) / dof
-    prior = fit_scaled_inv_chi2(s2, dof)
-    assert prior.mean == pytest.approx(nu0 * tau2 / (nu0 - 2), rel=0.05)
+    true = rng.normal(0, 0.05, size=2000)
+    s2_ = rng.uniform(0.001, 0.01, size=2000)
+    d = true + rng.normal(0, np.sqrt(s2_))
+    shrunk, prior = s3(d, s2_)
+    assert prior.tau2 == pytest.approx(0.0025, rel=0.15)
+    assert np.all(np.abs(shrunk) <= np.abs(d) + 1e-12)
+    out, _ = s3(np.array([0.1, -0.1, np.nan]), np.array([1e-9, 1e-9, np.nan]))
+    assert out[2] == 0.0                       # no attempts -> prior mean
+
+
+def test_s3_no_true_spread_sets_everyone_to_the_prior():
+    out, prior = s3(np.array([0.1, -0.1, 0.05, -0.05]), np.array([1.0, 1.0, 1.0, 1.0]))
+    assert prior.tau2 == 0 and np.all(out == 0)
+
+
+def test_s4_relative_risk():
+    rng = np.random.default_rng(4)
+    true = rng.gamma(10, 1 / 10, size=3000)
+    e = rng.uniform(20, 200, size=3000)
+    o = rng.poisson(true * e)
+    rr, prior = s4(o, e)
+    assert 1 / prior.k == pytest.approx(0.1, rel=0.3)
+    assert rr[0] == pytest.approx((o[0] + prior.k) / (e[0] + prior.k))
+    rr0, _ = s4(np.array([0.0, 3, 5]), np.array([0.0, 2, 6]))
+    assert rr0[0] == 1.0
+
+
+def test_scaled_inv_chi2_uses_doc_formula():
+    rng = np.random.default_rng(5)
+    nu0, s0 = 20.0, 4.0
+    sigma2 = nu0 * s0 / rng.chisquare(nu0, size=5000)
+    n = rng.integers(11, 81, size=5000)
+    s2_ = sigma2 * rng.chisquare(n - 1) / (n - 1)
+    prior = fit_scaled_inv_chi2(s2_, n)
     assert prior.nu0 == pytest.approx(nu0, rel=0.3)
+    got = prior.shrink([9.0, 9.0], [1, 31])
+    assert got[0] == pytest.approx(prior.s0_sq)
+    assert got[1] == pytest.approx((prior.nu0 * prior.s0_sq + 30 * 9.0) / (prior.nu0 + 30))

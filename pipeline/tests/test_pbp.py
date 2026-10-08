@@ -4,7 +4,8 @@
 import pandas as pd
 import pytest
 
-from nbagm.pbp import Stint, account_game, clock_tenths, is_reboundable_final_ft, possessions
+from nbagm.pbp import (Stint, account_live, account_v3, clock_tenths, is_reboundable_final_ft,
+                        possessions, turnover_class)
 
 A, B = 1610612701, 1610612702
 
@@ -67,7 +68,7 @@ def game():
         act(29, "PT07M00.00S", 2, B, 206, "Foul", "Personal", "B6 P.FOUL"),
         e2,
     ])
-    return account_game("g1", pbp, STANDARD_BOX)
+    return account_v3("g1", pbp, STANDARD_BOX)
 
 
 def c(acc, pid, team):
@@ -115,8 +116,8 @@ def test_seconds_on_court(game):
 
 
 def test_turnover_types_and_diagnostics(game):
-    assert game.turnovers_by_type[201]["Bad Pass"] == 1
-    assert game.turnovers_by_type[102]["Lost Ball"] == 1
+    assert game.turnovers_by_type[201]["bad pass"] == 1
+    assert game.turnovers_by_type[102]["lost ball"] == 1
     assert game.events_unresolved == 0
     assert game.diagnostics["period_starters_inferred"] == 2
     assert game.diagnostics.get("period_starters_unresolved", 0) == 0
@@ -134,7 +135,7 @@ def test_same_surname_is_resolved_by_who_appears_next():
         act(3, "PT05M00.00S", 1, A, 108, "Made Shot", "Layup", "Williams Layup", "Made", 1),
         e,
     ])
-    acc = account_game("g2", pbp, bx)
+    acc = account_v3("g2", pbp, bx)
     assert c(acc, 108, A)["team_fga"] == 1
     assert (107, A) not in acc.on_court
     assert acc.diagnostics["subs_resolved_by_lookahead"] == 1
@@ -150,7 +151,7 @@ def test_quiet_starter_is_completed_from_previous_period():
         actions.append(act(20 + k, f"PT{11 - k:02d}M00.00S", 2, B, 200 + k, "Foul", "Personal", "foul"))
     actions.append(act(30, "PT02M00.00S", 2, A, 101, "Made Shot", "Layup", "A1 Layup", "Made", 1))
     actions.append(e2)
-    acc = account_game("g3", pd.DataFrame(actions), STANDARD_BOX)
+    acc = account_v3("g3", pd.DataFrame(actions), STANDARD_BOX)
     assert c(acc, 105, A)["team_fga"] == 1
     assert acc.diagnostics["period_starters_completed_from_previous_period"] == 2
     assert acc.events_unresolved == 0
@@ -163,7 +164,7 @@ def test_rotation_data_is_used_for_period_starters_when_present():
                         act(2, "PT06M00.00S", 2, A, 101, "Made Shot", "Layup", "A1 Layup", "Made", 1), e2])
     stints = [Stint(p, A, 7200, 14400) for p in (101, 102, 103, 104, 106)]
     stints += [Stint(p, B, 7200, 14400) for p in (201, 202, 203, 204, 205)]
-    acc = account_game("g4", pbp, STANDARD_BOX, stints)
+    acc = account_v3("g4", pbp, STANDARD_BOX, stints)
     assert c(acc, 106, A)["team_fga"] == 1 and (105, A) not in acc.on_court
     assert acc.diagnostics.get("period_starters_inferred", 0) == 0
 
@@ -175,7 +176,7 @@ def test_unresolvable_lineup_skips_events_instead_of_guessing():
                         act(2, "PT06M00.00S", 1, A, 101, "Substitution", "", "SUB: Nobody FOR A1"),
                         act(3, "PT05M00.00S", 1, A, 102, "Made Shot", "Layup", "A2 Layup", "Made", 1),
                         e1])
-    acc = account_game("g5", pbp, STANDARD_BOX)
+    acc = account_v3("g5", pbp, STANDARD_BOX)
     assert acc.diagnostics["subs_unresolved"] == 1
     assert acc.events_unresolved == 1          # only 4 of 5 ever identified: never guessed
     assert (102, A) not in acc.on_court
@@ -205,7 +206,7 @@ def test_lineup_recovers_once_the_unknown_substitute_shows_up():
         act(5, "PT04M00.00S", 1, A, 103, "Made Shot", "Layup", "A3 Layup", "Made", 1),
         e1,
     ])
-    acc = account_game("g6", pbp, STANDARD_BOX)
+    acc = account_v3("g6", pbp, STANDARD_BOX)
     assert acc.diagnostics["subs_unresolved"] == 1
     assert acc.diagnostics["lineups_recovered_mid_period"] >= 1
     # the shot at 5:50 is attributed once 106 is identified as the fifth player
@@ -222,7 +223,7 @@ def test_initial_name_form_matches():
     s, e = period_marks(1)
     pbp = pd.DataFrame([s, act(2, "PT06M00.00S", 1, A, 101, "Substitution", "", "SUB: X. Williams FOR A1"),
                         act(3, "PT05M00.00S", 1, A, 107, "Made Shot", "Layup", "Layup", "Made", 1), e])
-    acc = account_game("g7", pbp, bx)
+    acc = account_v3("g7", pbp, bx)
     assert acc.diagnostics.get("subs_unresolved", 0) == 0
     assert c(acc, 107, A)["team_fga"] == 1
 
@@ -235,6 +236,109 @@ def test_given_name_used_in_play_by_play_matches():
     s, e = period_marks(1)
     pbp = pd.DataFrame([s, act(2, "PT06M00.00S", 1, A, 101, "Substitution", "", "SUB: Hansen FOR A1"),
                         act(3, "PT05M00.00S", 1, A, 107, "Made Shot", "Layup", "Layup", "Made", 1), e])
-    acc = account_game("g8", pbp, bx)
+    acc = account_v3("g8", pbp, bx)
     assert acc.diagnostics.get("subs_unresolved", 0) == 0
     assert c(acc, 107, A)["team_fga"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# cdn.nba.com liveData shape (primary source)
+# --------------------------------------------------------------------------- #
+
+def la(n, clock, period, team, person, action_type, sub_type="", descriptor="", **kw):
+    return {"actionNumber": n, "clock": clock, "period": period, "teamId": team, "personId": person,
+            "actionType": action_type, "subType": sub_type, "descriptor": descriptor, **kw}
+
+
+@pytest.fixture
+def live_game():
+    acts = [
+        la(1, "PT12M00.00S", 1, None, 0, "period", "start"),
+        # A3 makes a layup assisted by A1
+        la(2, "PT11M00.00S", 1, A, 103, "2pt", "Layup", "driving", shotResult="Made", shotDistance=2.1,
+           assistPersonId=101, possession=A),
+        # B1 misses a 3 blocked by A5; A recovers it (defensive rebound by A2)
+        la(3, "PT10M40.00S", 1, B, 201, "3pt", "Jump Shot", "", shotResult="Missed", shotDistance=25.0,
+           blockPersonId=105, possession=B),
+        la(4, "PT10M40.00S", 1, A, 105, "block", possession=B),
+        la(5, "PT10M38.00S", 1, A, 102, "rebound", "defensive", possession=A),
+        # A2 commits an offensive foul drawn by B2 (charge), logged also as a turnover
+        la(6, "PT10M20.00S", 1, A, 102, "foul", "offensive", "charge", foulDrawnPersonId=202, possession=A),
+        la(7, "PT10M20.00S", 1, A, 102, "turnover", "offensive foul", possession=B),
+        # B3 is fouled on a shot by A4: 2 FTs, one made
+        la(8, "PT10M00.00S", 1, A, 104, "foul", "personal", "shooting", foulDrawnPersonId=203, possession=B),
+        la(9, "PT10M00.00S", 1, B, 203, "freethrow", "1 of 2", shotResult="Made", possession=B),
+        # A swaps two players at one stoppage: out 101, out 102, in 106, in 107
+        la(10, "PT10M00.00S", 1, A, 101, "substitution", "out", possession=B),
+        la(11, "PT10M00.00S", 1, A, 102, "substitution", "out", possession=B),
+        la(12, "PT10M00.00S", 1, A, 106, "substitution", "in", possession=B),
+        la(13, "PT10M00.00S", 1, A, 107, "substitution", "in", possession=B),
+        la(14, "PT10M00.00S", 1, B, 203, "freethrow", "2 of 2", shotResult="Missed", possession=B),
+        la(15, "PT09M58.00S", 1, A, 106, "rebound", "defensive", possession=A),
+        # A6 loses the ball out of bounds (handling); B4 commits a non-shooting foul while defending
+        la(16, "PT09M30.00S", 1, B, 204, "foul", "personal", "", foulDrawnPersonId=107, possession=A),
+        la(17, "PT09M00.00S", 1, A, 106, "turnover", "out-of-bounds", "lost ball", possession=B),
+        # B5 misses a blocked layup (A3), B rebounds it: not recovered
+        la(18, "PT08M00.00S", 1, B, 205, "2pt", "Layup", "", shotResult="Missed", shotDistance=3.0,
+           blockPersonId=103, possession=B),
+        la(19, "PT07M59.00S", 1, B, 0, "rebound", "offensive", possession=B),
+        la(20, "PT07M00.00S", 1, B, 201, "turnover", "bad pass", possession=A),
+        la(21, "PT00M00.00S", 1, None, 0, "period", "end"),
+    ]
+    bx = box([(100 + k, A, f"A{k}", k <= 5, "12:00") for k in range(1, 8)]
+             + [(200 + k, B, f"B{k}", k <= 5, "12:00") for k in range(1, 6)])
+    return account_live("L1", pd.DataFrame(acts), bx)
+
+
+def test_live_assists_blocks_and_recoveries(live_game):
+    g = live_game
+    assert g.assists == [(101, 103, 2)]
+    assert g.player_events[105]["pbp_blocks_P3"] == 1 and g.player_events[105]["pbp_blocks_recovered"] == 1
+    assert g.player_events[103]["pbp_blocks_R"] == 1
+    assert g.player_events[103].get("pbp_blocks_recovered", 0) == 0
+
+
+def test_live_fouls(live_game):
+    g = live_game
+    assert g.player_events[202]["offensive_fouls_drawn"] == 1
+    assert g.player_events[104]["shooting_fouls"] == 1
+    assert g.shooting_fouls == 1 and g.shooting_foul_ft_points == 1
+    assert g.player_events[204]["nonshooting_def_fouls"] == 1
+    assert g.player_events[102].get("nonshooting_def_fouls", 0) == 0   # offensive foul
+
+
+def test_live_turnover_classes(live_game):
+    g = live_game
+    assert g.player_events[102]["tov_decision"] == 1
+    assert g.player_events[106]["tov_handling"] == 1
+    assert g.player_events[201]["tov_bad_pass"] == 1
+
+
+def test_live_multi_player_substitution(live_game):
+    g = live_game
+    assert g.events_unresolved == 0
+    assert c(g, 106, A)["team_dreb"] == 1
+    assert (101, A) in g.on_court and "team_dreb" in c(g, 101, A)   # first rebound, before the swap
+    assert g.seconds_on[101] == pytest.approx(120)
+    assert g.seconds_on[106] == pytest.approx(600)
+    assert sorted(m for p, m in g.player_stints if p == 101) == [pytest.approx(2.0)]
+
+
+def test_live_shots_and_stints(live_game):
+    g = live_game
+    shooters = {s[0]: s for s in g.shots}
+    assert shooters[2][7] == pytest.approx(1.0)        # A3 had been on for one minute
+    # two ten-man stints: before and after the swap at 10:00
+    assert len(g.stints) == 2
+    first = g.stints[0]["counts"]
+    assert first[A]["pts"] == 2 and first[B]["fga"] == 1 and first[B]["fta"] == 1
+
+
+@pytest.mark.parametrize("sub,expected", [
+    ("Bad Pass", "bad_pass"), ("Out of Bounds - Bad Pass Turnover", "bad_pass"),
+    ("out-of-bounds lost ball", "handling"), ("Lost Ball", "handling"), ("Traveling", "handling"),
+    ("Double Dribble", "handling"), ("Discontinued Dribble", "handling"), ("Palming", "handling"),
+    ("Offensive Foul", "decision"), ("Shot Clock", "decision"), ("3 Second Violation", "decision"),
+])
+def test_turnover_taxonomy(sub, expected):
+    assert turnover_class(sub) == expected
