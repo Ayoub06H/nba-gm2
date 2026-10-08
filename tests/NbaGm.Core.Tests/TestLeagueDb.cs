@@ -22,15 +22,21 @@ internal sealed class TestLeagueDb : IDisposable
             for (var k = 0; k < PlayersPerTeam; k++)
             {
                 var pid = PlayerId(t, k);
-                Exec(con, "INSERT INTO players (player_id, team_id, first_name, last_name, jersey, listed_position, " +
-                          "height_in, weight_lb, wingspan_in, wingspan_imputed, games_played, games_started, " +
-                          "minutes_per_game, depth_rank) VALUES " +
-                          $"({pid}, {teamId}, 'F{pid}', 'L{pid}', '{k}', 'G', {74 + k}, {200 + k}, {78 + k}, {k % 2}, " +
-                          $"80, {(k < 5 ? 80 - k : 0)}, {34 - k}, {PlayersPerTeam - k})");
+                var noData = k == PlayersPerTeam - 1 ? 1 : 0;   // last man never played
+                var (label, index) = Positions[k % Positions.Length];
+                Exec(con, "INSERT INTO players (player_id, team_id, first_name, last_name, jersey, position, " +
+                          "position_index, age, height_in, weight_lb, wingspan_in, wingspan_imputed, games_played, " +
+                          "games_started, minutes_per_game, depth_rank, no_data, placeholder_rating) VALUES " +
+                          $"({pid}, {teamId}, 'F{pid}', 'L{pid}', '{k}', '{label}', {index}, 25, {74 + k}, {200 + k}, " +
+                          $"{78 + k}, {k % 2}, {(noData == 1 ? 0 : 80)}, {(k < 5 ? 80 - k : 0)}, {34 - k}, " +
+                          $"{PlayersPerTeam - k}, {noData}, {noData})");
                 foreach (var a in Enum.GetValues<AttributeId>())
                 {
-                    Exec(con, $"INSERT INTO player_attributes (player_id, attribute, percentile, rating) VALUES " +
-                              $"({pid}, '{DbKeys.ToKey(a)}', 0.5, {AttributeValue(pid, a)})");
+                    Exec(con, noData == 1
+                        ? $"INSERT INTO player_attributes (player_id, attribute, rating, placeholder) VALUES " +
+                          $"({pid}, '{DbKeys.ToKey(a)}', 40.0, 1)"
+                        : $"INSERT INTO player_attributes (player_id, attribute, score, percentile, rating) VALUES " +
+                          $"({pid}, '{DbKeys.ToKey(a)}', 0.1, 0.5, {AttributeValue(pid, a)})");
                 }
                 foreach (var tn in Enum.GetValues<TendencyId>())
                 {
@@ -39,7 +45,9 @@ internal sealed class TestLeagueDb : IDisposable
                 }
                 foreach (var tr in Enum.GetValues<TraitId>())
                 {
-                    Exec(con, $"INSERT INTO player_traits VALUES ({pid}, '{DbKeys.ToKey(tr)}', 0.1, 1.5, 1, 'Mild')");
+                    Exec(con, noData == 1
+                        ? $"INSERT INTO player_traits VALUES ({pid}, '{DbKeys.ToKey(tr)}', NULL, 0, 0, NULL)"
+                        : $"INSERT INTO player_traits VALUES ({pid}, '{DbKeys.ToKey(tr)}', 0.1, 1.5, 1, 'Mild')");
                 }
             }
         }
@@ -52,6 +60,9 @@ internal sealed class TestLeagueDb : IDisposable
         Exec(con, $"INSERT INTO games VALUES ('0022500001', '2025-10-21', {TeamId(0)}, {TeamId(1)}, 110, 104)");
         Exec(con, "COMMIT");
     }
+
+    private static readonly (string, int)[] Positions =
+        [("G", 1), ("G-F", 2), ("F-G", 2), ("F", 3), ("F-C", 4), ("C-F", 4), ("C", 5)];
 
     public static int TeamId(int t) => 1610612737 + t;
     public static int PlayerId(int t, int k) => 1000 + t * 10 + k;
@@ -78,7 +89,7 @@ internal sealed class TestLeagueDb : IDisposable
     }
 
     private static void Status(SqliteConnection con, string kind, string name) =>
-        Exec(con, $"INSERT INTO derivation_status VALUES ('{kind}', '{name}', 'derived', '', '')");
+        Exec(con, $"INSERT INTO derivation_status VALUES ('{kind}', '{name}', 'derived', '')");
 
     public void Dispose()
     {

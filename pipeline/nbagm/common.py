@@ -78,11 +78,22 @@ class Ctx:
         self.audit = audit
         self._memo = {}
 
-    def _cached(self, key, fn):
-        """A statistic used by several fields is shrunk once, under one name."""
-        if key not in self._memo:
-            self._memo[key] = fn()
-        return self._memo[key]
+    def _cached(self, key, fn, *args):
+        """A statistic used by several fields is shrunk once, under one name. Reusing a
+        name for different inputs is a bug, so the inputs are fingerprinted."""
+        import hashlib
+        h = hashlib.sha1()
+        for a in args:
+            h.update(np.asarray(a, dtype=float).tobytes() if a is not None else b"none")
+        fp = h.hexdigest()
+        if key in self._memo:
+            old_fp, value = self._memo[key]
+            if old_fp != fp:
+                raise DerivationError(f"statistic name {key[1]!r} used for two different inputs")
+            return value
+        value = fn()
+        self._memo[key] = (fp, value)
+        return value
 
     def col(self, name):
         return self.inputs[name].to_numpy(dtype=float)
@@ -97,7 +108,8 @@ class Ctx:
                                       mean=_finite(mean), n_players=int(n)))
 
     def s1(self, kind, name, successes, opportunities):
-        return self._cached(("s1", name), lambda: self._s1(kind, name, successes, opportunities))
+        return self._cached(("s1", name), lambda: self._s1(kind, name, successes, opportunities),
+                            successes, opportunities)
 
     def _s1(self, kind, name, successes, opportunities):
         out, p = sh.s1(successes, opportunities, name=name, ids=self.ids.to_numpy())
@@ -105,7 +117,8 @@ class Ctx:
         return out
 
     def s2(self, kind, name, counts, exposure):
-        return self._cached(("s2", name), lambda: self._s2(kind, name, counts, exposure))
+        return self._cached(("s2", name), lambda: self._s2(kind, name, counts, exposure),
+                            counts, exposure)
 
     def _s2(self, kind, name, counts, exposure):
         counts = np.asarray(counts, float)
@@ -118,6 +131,10 @@ class Ctx:
         return out
 
     def s3(self, kind, name, d, s2_, prior_mean=0.0):
+        return self._cached(("s3", name), lambda: self._s3(kind, name, d, s2_, prior_mean),
+                            d, s2_, prior_mean)
+
+    def _s3(self, kind, name, d, s2_, prior_mean):
         out, p = sh.s3(d, s2_, prior_mean=prior_mean, name=name)
         self._prior(kind, name, "normal", p.tau2, None, p.mean, p.n_players)
         if p.tau2 == 0:
@@ -126,6 +143,10 @@ class Ctx:
         return out, p
 
     def s4(self, kind, name, observed, expected):
+        return self._cached(("s4", name), lambda: self._s4(kind, name, observed, expected),
+                            observed, expected)
+
+    def _s4(self, kind, name, observed, expected):
         out, p = sh.s4(observed, expected, name=name)
         self._prior(kind, name, "gamma_rr", p.k, None, 1.0, p.n_players)
         return out

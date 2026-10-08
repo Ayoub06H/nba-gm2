@@ -15,7 +15,7 @@ purely from real statistics (docs 02-04). Nothing is simulated yet.
 | Derived league file, committed after the local run | `data/league_2025_26.sqlite` |
 | C# data model and loader | `src/NbaGm.Core` |
 | Phase 1 definition-of-done check | `tools/NbaGm.Phase1Check` |
-| Open documentation gaps blocking specific fields | `pipeline/GAPS.md` |
+| Open questions on the docs, and mechanical readings | `pipeline/GAPS.md` |
 
 ```bash
 dotnet test                                    # C# model/loader tests
@@ -23,5 +23,6 @@ cd pipeline && python -m pytest                # pipeline tests (incl. a full sy
 dotnet run --project tools/NbaGm.Phase1Check   # check data/league_2025_26.sqlite
 ```
 
-`LeagueLoader.Load` refuses to load a league file in which any player is missing a derived value,
-so the game never runs on placeholders.
+`LeagueLoader.Load` refuses to load a league file in which any player is missing a value. The one
+placeholder allowed is doc 02's temporary 40.0 for rostered players with no 2025-26 exposure, which
+is flagged on the player (`NoData`, `HasPlaceholderRatings`).

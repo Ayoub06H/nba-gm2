@@ -11,7 +11,6 @@ public sealed record FieldCompleteness(
     int PlayersWithValue,
     int TotalPlayers,
     string Status,
-    string GapIds,
     string Note)
 {
     public bool IsComplete => TotalPlayers > 0 && PlayersWithValue == TotalPlayers;
@@ -19,17 +18,21 @@ public sealed record FieldCompleteness(
 
 /// <summary>
 /// Phase 1's definition of done (doc 11), checked against a league file: all 30 teams, and
-/// every rostered player with a real, derived value for every attribute, tendency, trait and
-/// measurable. Reads the file without loading the model, so it works on incomplete files too.
+/// every rostered player with a value for every attribute, tendency, trait and measurable
+/// (players with no exposure carry doc 02's flagged placeholder). Reads the file without
+/// loading the model, so it works on incomplete files too.
 /// </summary>
 public sealed class CompletenessReport
 {
     public required string Season { get; init; }
     public required int TeamCount { get; init; }
     public required int PlayerCount { get; init; }
+
+    /// <summary>Rostered players with no 2025-26 exposure (placeholder ratings, doc 02).</summary>
+    public required int NoDataPlayers { get; init; }
     public required IReadOnlyList<FieldCompleteness> Fields { get; init; }
 
-    /// <summary>Required by doc 11 but outside the Phase 1 attribute/tendency/trait scope.</summary>
+    /// <summary>Fields doc 11 allows to stay empty (contracts without a named real source).</summary>
     public required IReadOnlyList<FieldCompleteness> OtherFields { get; init; }
 
     /// <summary>Keys present in the file that the C# model does not know, or vice versa.</summary>
@@ -44,14 +47,13 @@ public sealed class CompletenessReport
         int Scalar(string sql) => Convert.ToInt32(new SqliteCommand(sql, con).ExecuteScalar());
 
         var players = Scalar("SELECT COUNT(*) FROM players");
-        var status = new Dictionary<(string, string), (string Status, string Gaps, string Note)>();
-        using (var cmd = new SqliteCommand("SELECT kind, name, status, gap_ids, note FROM derivation_status", con))
+        var status = new Dictionary<(string, string), (string Status, string Note)>();
+        using (var cmd = new SqliteCommand("SELECT kind, name, status, note FROM derivation_status", con))
         using (var r = cmd.ExecuteReader())
         {
             while (r.Read())
             {
-                status[(r.GetString(0), r.GetString(1))] =
-                    (r.GetString(2), r.IsDBNull(3) ? "" : r.GetString(3), r.IsDBNull(4) ? "" : r.GetString(4));
+                status[(r.GetString(0), r.GetString(1))] = (r.GetString(2), r.IsDBNull(3) ? "" : r.GetString(3));
             }
         }
 
@@ -60,12 +62,12 @@ public sealed class CompletenessReport
 
         FieldCompleteness Field(string kind, string key, string countSql)
         {
-            var s = status.TryGetValue((kind, key), out var st) ? st : ("missing", "", "");
+            var s = status.TryGetValue((kind, key), out var st) ? st : ("missing", "");
             if (s.Item1 == "missing")
             {
                 mismatches.Add($"{kind} '{key}' has no derivation_status row");
             }
-            return new FieldCompleteness(kind, key, Scalar(countSql), players, s.Item1, s.Item2, s.Item3);
+            return new FieldCompleteness(kind, key, Scalar(countSql), players, s.Item1, s.Item2);
         }
 
         void Fields<TEnum>(string kind, string table, string column, string valueCondition)
@@ -91,16 +93,17 @@ public sealed class CompletenessReport
 
         Fields<AttributeId>("attribute", "player_attributes", "attribute", "t.rating IS NOT NULL");
         Fields<TendencyId>("tendency", "player_tendencies", "tendency", "t.value IS NOT NULL");
+        // A player with no data has no trait value, only z = 0 / tier 0 ("no trait").
         Fields<TraitId>("trait", "player_traits", "trait",
-            "t.value IS NOT NULL AND t.z_score IS NOT NULL AND t.tier IS NOT NULL");
+            "t.z_score IS NOT NULL AND t.tier IS NOT NULL AND (t.value IS NOT NULL OR p.no_data = 1)");
         foreach (var col in new[] { "height_in", "weight_lb", "wingspan_in" })
         {
             fields.Add(Field("measurable", col, $"SELECT COUNT(*) FROM players WHERE {col} IS NOT NULL"));
         }
 
+        fields.Add(Field("player_field", "position", "SELECT COUNT(*) FROM players WHERE position IS NOT NULL"));
         var other = new List<FieldCompleteness>
         {
-            Field("player_field", "position", "SELECT COUNT(*) FROM players WHERE position IS NOT NULL"),
             Field("player_field", "contract",
                 "SELECT COUNT(*) FROM players p WHERE EXISTS (SELECT 1 FROM contracts c WHERE c.player_id = p.player_id)"),
         };
@@ -111,6 +114,7 @@ public sealed class CompletenessReport
             Season = season ?? "?",
             TeamCount = Scalar("SELECT COUNT(DISTINCT team_id) FROM players"),
             PlayerCount = players,
+            NoDataPlayers = Scalar("SELECT COUNT(*) FROM players WHERE no_data = 1"),
             Fields = fields,
             OtherFields = other,
             KeyMismatches = mismatches,
@@ -120,7 +124,8 @@ public sealed class CompletenessReport
     public override string ToString()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Season {Season}: {PlayerCount} rostered players on {TeamCount} teams");
+        sb.AppendLine($"Season {Season}: {PlayerCount} rostered players on {TeamCount} teams " +
+                      $"({NoDataPlayers} with no data: placeholder ratings)");
         foreach (var group in Fields.GroupBy(f => f.Kind))
         {
             var done = group.Count(f => f.IsComplete);
@@ -133,7 +138,7 @@ public sealed class CompletenessReport
             foreach (var f in incomplete)
             {
                 sb.AppendLine($"    {f.Kind,-12} {f.Key,-36} {f.PlayersWithValue,4}/{f.TotalPlayers,-4} " +
-                              $"{f.Status,-8} {f.GapIds}");
+                              $"{f.Status,-8} {f.Note}");
             }
         }
         foreach (var m in KeyMismatches)

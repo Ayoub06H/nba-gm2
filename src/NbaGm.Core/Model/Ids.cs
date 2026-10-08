@@ -1,6 +1,6 @@
 namespace NbaGm.Core.Model;
 
-/// <summary>The 28 rated attributes locked in doc 01 (measurables live in <see cref="Measurables"/>).</summary>
+/// <summary>The 27 rated attributes locked in doc 01 (measurables live in <see cref="Measurables"/>).</summary>
 public enum AttributeId
 {
     // Offense: rim scoring
@@ -19,14 +19,13 @@ public enum AttributeId
     BallHandle,
     PassingAccuracy,
     Vision,
-    BallSecurity,
-    ShotSelection,
     OffensiveIq,
 
     // Defense
     OffensiveRebounding,
     DefensiveRebounding,
     Steals,
+    ShotBlocking,
     OffBallDefense,
     OnBallDefense,
     PostDefense,
@@ -43,7 +42,7 @@ public enum AttributeId
 }
 
 /// <summary>
-/// The 21 Phase 1 tendencies (doc 03), each a real rate in [0, 1]. Either/or pairs are one
+/// The 20 Phase 1 tendencies (doc 03), each a real rate in [0, 1]. Either/or pairs are one
 /// slider; each pair's comment says which option 1.0 means.
 /// </summary>
 public enum TendencyId
@@ -60,15 +59,15 @@ public enum TendencyId
     PickAndRollUsage,
     /// <summary>Kick-out share of drive passes + drive shots (1 = always kicks).</summary>
     DriveAndKickVsDriveToFinish,
-    /// <summary>Passes made per touch (1 = pass-first).</summary>
+    /// <summary>Passes made / (passes made + FGA) (1 = pass-first).</summary>
     PassFirstVsScoreFirst,
+    /// <summary>FTA / (FGA + FTA).</summary>
     FoulContactSeeking,
 
     CuttingFrequency,
     ScreenSettingWillingness,
 
     GambleForSteals,
-    HelpDefenseAggressiveness,
     DefensiveFoulAggression,
 
     OffensiveReboundCrashRate,
@@ -87,14 +86,4 @@ public enum TraitId
     Clutch,
     Hustle,
     Streaky,
-}
-
-/// <summary>Physical sizing reference for default matchups (doc 06, doc 11).</summary>
-public enum Position
-{
-    PG,
-    SG,
-    SF,
-    PF,
-    C,
 }

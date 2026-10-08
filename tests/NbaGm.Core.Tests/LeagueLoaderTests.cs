@@ -27,8 +27,32 @@ public class LeagueLoaderTests
         }
         Assert.Equal(1, p.Traits[TraitId.Hustle].Tier);
         Assert.Equal(76, p.Measurables.HeightIn);
-        Assert.Null(p.Position);
+        Assert.Equal("F-G", p.Position.Label);
+        Assert.Equal(2, p.Position.Index);
+        Assert.False(p.NoData);
         Assert.Null(p.Contract);
+    }
+
+    [Fact]
+    public void Players_without_exposure_carry_the_flagged_placeholder()
+    {
+        using var db = new TestLeagueDb();
+        var league = LeagueLoader.Load(db.Path);
+        var p = league.Player(TestLeagueDb.PlayerId(5, TestLeagueDb.PlayersPerTeam - 1));
+        Assert.True(p.NoData);
+        Assert.True(p.HasPlaceholderRatings);
+        Assert.All(Enum.GetValues<AttributeId>(), a => Assert.Equal(Player.PlaceholderRating, p.Attributes[a]));
+        Assert.All(Enum.GetValues<TraitId>(), t => Assert.False(p.Traits[t].HasTrait));
+        Assert.Null(p.Traits[TraitId.Durability].Value);
+    }
+
+    [Fact]
+    public void Placeholder_flag_must_match_the_ratings()
+    {
+        using var db = new TestLeagueDb();
+        db.Exec($"UPDATE player_attributes SET rating = 41 WHERE player_id = {TestLeagueDb.PlayerId(5, TestLeagueDb.PlayersPerTeam - 1)} " +
+                "AND attribute = 'vision'");
+        Assert.Throws<InvalidDataException>(() => LeagueLoader.Load(db.Path));
     }
 
     [Fact]
@@ -49,15 +73,15 @@ public class LeagueLoaderTests
     public void A_single_missing_value_blocks_loading_and_is_named_in_the_report()
     {
         using var db = new TestLeagueDb();
-        db.Exec($"UPDATE player_tendencies SET value = NULL WHERE player_id = {TestLeagueDb.PlayerId(0, 0)} " +
-                "AND tendency = 'help_defense_aggressiveness'");
-        db.Exec("UPDATE derivation_status SET status = 'failed', gap_ids = 'F9' WHERE name = 'help_defense_aggressiveness'");
+        db.Exec($"DELETE FROM player_tendencies WHERE player_id = {TestLeagueDb.PlayerId(0, 0)} " +
+                "AND tendency = 'charge_taking_willingness'");
+        db.Exec("UPDATE derivation_status SET status = 'failed', note = 'why' WHERE name = 'charge_taking_willingness'");
 
         var ex = Assert.Throws<IncompleteLeagueDataException>(() => LeagueLoader.Load(db.Path));
         var field = Assert.Single(ex.Report.Fields, f => !f.IsComplete);
-        Assert.Equal("help_defense_aggressiveness", field.Key);
+        Assert.Equal("charge_taking_willingness", field.Key);
         Assert.Equal(30 * TestLeagueDb.PlayersPerTeam - 1, field.PlayersWithValue);
-        Assert.Equal("F9", field.GapIds);
+        Assert.Equal("why", field.Note);
         Assert.Contains("PHASE 1 NOT COMPLETE", ex.Message);
     }
 

@@ -2,3 +2,5 @@ nba_api==1.11.4
 pandas>=2.2,<4
 numpy>=1.26,<3
 pytest>=8
+scikit-learn>=1.5,<2
+scipy>=1.13,<2

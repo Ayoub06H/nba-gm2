@@ -33,9 +33,31 @@ public class ModelTests
     [Fact]
     public void Locked_list_sizes()
     {
-        Assert.Equal(28, AttributeSet.Count);
-        Assert.Equal(21, TendencySet.Count);
+        Assert.Equal(27, AttributeSet.Count);
+        Assert.Equal(20, TendencySet.Count);
         Assert.Equal(5, TraitSet.Count);
+    }
+
+    [Theory]
+    [InlineData("G", 1)]
+    [InlineData("G-F", 2)]
+    [InlineData("F-G", 2)]
+    [InlineData("F", 3)]
+    [InlineData("F-C", 4)]
+    [InlineData("C-F", 4)]
+    [InlineData("C", 5)]
+    public void Position_index_follows_doc_11(string label, int index)
+    {
+        var p = new Position(label);
+        Assert.Equal(label, p.Label);
+        Assert.Equal(index, p.Index);
+    }
+
+    [Fact]
+    public void Unpublished_position_labels_are_rejected()
+    {
+        Assert.Throws<ArgumentException>(() => new Position("PG"));
+        Assert.Equal(7, Position.Labels.Count);
     }
 
     [Fact]

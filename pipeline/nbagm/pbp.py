@@ -53,6 +53,13 @@ def _int(x):
     return v or None
 
 
+def _str(x):
+    """Text field; None and NaN (a key missing from some rows of a DataFrame) are ''."""
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return ""
+    return str(x)
+
+
 def norm_name(s):
     s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]", "", s.lower())
@@ -149,9 +156,9 @@ def events_from_v3(rows, teams):
     for i, r in enumerate(rows):
         period, clock = int(r["period"]), r["clock"]
         e = Ev(i, period, clock, clock_tenths(clock, period), "other")
-        at = str(r.get("actionType") or "")
-        sub = str(r.get("subType") or "")
-        desc = str(r.get("description") or "")
+        at = _str(r.get("actionType"))
+        sub = _str(r.get("subType"))
+        desc = _str(r.get("description"))
         tid, pid = _int(r.get("teamId")), _int(r.get("personId"))
         e.team = tid if tid in teams else (pid if pid in teams else None)
         e.person = pid if pid is not None and pid not in teams else None
@@ -161,8 +168,8 @@ def events_from_v3(rows, teams):
             e.kind = "fga"
             e.value = sv if sv in (2, 3) else (3 if "3PT" in desc.upper() else 2)
             e.made = r.get("shotResult") == "Made" or at == "Made Shot"
-            dist = r.get("shotDistance")
-            e.distance = float(dist) if dist not in (None, "") else None
+            dist = _str(r.get("shotDistance"))
+            e.distance = float(dist) if dist else None
             e.event_id = _int(r.get("actionNumber"))
             m = _AST.search(desc)
             e.assist_name = m.group(1) if (m and e.made) else None
@@ -212,10 +219,10 @@ def events_from_live(actions, teams):
     for i, a in enumerate(actions):
         period, clock = int(a["period"]), a["clock"]
         e = Ev(i, period, clock, clock_tenths(clock, period), "other")
-        at = str(a.get("actionType") or "").lower()
+        at = _str(a.get("actionType")).lower()
         # liveData splits a type into subType + descriptor ("personal" + "shooting",
         # "out-of-bounds" + "bad pass"); both are kept so the classifiers see the whole type
-        e.sub = " ".join(str(a.get(k) or "") for k in ("subType", "descriptor")).strip().lower()
+        e.sub = " ".join(_str(a.get(k)) for k in ("subType", "descriptor")).strip().lower()
         tid, pid = _int(a.get("teamId")), _int(a.get("personId"))
         e.team = tid if tid in teams else (pid if pid in teams else None)
         e.person = pid if pid is not None and pid not in teams else None
@@ -223,8 +230,8 @@ def events_from_live(actions, teams):
         if at in ("2pt", "3pt"):
             e.kind, e.value = "fga", (3 if at == "3pt" else 2)
             e.made = a.get("shotResult") == "Made"
-            dist = a.get("shotDistance")
-            e.distance = float(dist) if dist not in (None, "") else None
+            dist = _str(a.get("shotDistance"))
+            e.distance = float(dist) if dist else None
             e.event_id = _int(a.get("actionNumber"))
             e.assist = _int(a.get("assistPersonId")) if e.made else None
             e.blocker = _int(a.get("blockPersonId")) if not e.made else None

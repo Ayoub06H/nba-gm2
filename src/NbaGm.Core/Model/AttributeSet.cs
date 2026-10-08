@@ -1,7 +1,7 @@
 namespace NbaGm.Core.Model;
 
 /// <summary>
-/// A player's 28 rated attributes. Values are unrounded doubles on the 0-99 display range
+/// A player's 27 rated attributes. Values are unrounded doubles on the 0-99 display range
 /// (doc 11 "Internal attribute storage"); round only when displaying.
 /// </summary>
 public sealed class AttributeSet
@@ -60,10 +60,10 @@ public sealed class TendencySet
 }
 
 /// <summary>
-/// One trait (doc 04): the underlying real value, its distance from the reference in SDs,
-/// and the five-position tier (-2..2, 0 = no trait).
+/// One trait (doc 04): the underlying shrunk real value (null for a player with no data), its
+/// distance from the reference in SDs, and the five-position tier (-2..2, 0 = no trait).
 /// </summary>
-public sealed record Trait(double Value, double ZScore, int Tier, string? TierName)
+public sealed record Trait(double? Value, double ZScore, int Tier, string? TierName)
 {
     public bool HasTrait => Tier != 0;
 }
